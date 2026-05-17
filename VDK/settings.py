@@ -10,27 +10,53 @@ For the full list of settings and their values, see
 https://docs.djangoproject.com/en/5.2/ref/settings/
 """
 
+import os
 from pathlib import Path
+
+import dj_database_url
+from dotenv import load_dotenv
+
+
+def env_bool(name: str, default: bool = False) -> bool:
+    value = os.environ.get(name)
+    if value is None:
+        return default
+    return value.lower() in {'1', 'true', 'yes', 'on'}
+
+
+def env_list(name: str, default: list[str]) -> list[str]:
+    value = os.environ.get(name)
+    if not value:
+        return default
+    return [item.strip() for item in value.split(',') if item.strip()]
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
+
+load_dotenv(BASE_DIR / '.env')
 
 
 # Quick-start development settings - unsuitable for production
 # See https://docs.djangoproject.com/en/5.2/howto/deployment/checklist/
 
 # SECURITY WARNING: keep the secret key used in production secret!
-SECRET_KEY = 'django-insecure-46b!9vf9kn4sd#0hlgc9xwqq*vjatpa(z!0hoasxo_kt3c&p@n'
+SECRET_KEY = os.environ.get(
+    'DJANGO_SECRET_KEY',
+    'django-insecure-46b!9vf9kn4sd#0hlgc9xwqq*vjatpa(z!0hoasxo_kt3c&p@n',
+)
 
 # SECURITY WARNING: don't run with debug turned on in production!
-DEBUG = True
+DEBUG = env_bool('DJANGO_DEBUG', True)
 
-ALLOWED_HOSTS = []
+ALLOWED_HOSTS = env_list('DJANGO_ALLOWED_HOSTS', ['127.0.0.1', 'localhost'])
 
 
 # Application definition
 
 INSTALLED_APPS = [
+    'daphne',
+    'channels',
+    'iot',
     'django.contrib.admin',
     'django.contrib.auth',
     'django.contrib.contenttypes',
@@ -67,17 +93,47 @@ TEMPLATES = [
 ]
 
 WSGI_APPLICATION = 'VDK.wsgi.application'
+ASGI_APPLICATION = 'VDK.asgi.application'
+
+CHANNEL_REDIS_URL = os.environ.get('CHANNEL_REDIS_URL')
+
+if CHANNEL_REDIS_URL:
+    CHANNEL_LAYERS = {
+        'default': {
+            'BACKEND': 'channels_redis.core.RedisChannelLayer',
+            'CONFIG': {
+                'hosts': [CHANNEL_REDIS_URL],
+            },
+        },
+    }
+else:
+    CHANNEL_LAYERS = {
+        'default': {
+            'BACKEND': 'channels.layers.InMemoryChannelLayer',
+        },
+    }
 
 
 # Database
 # https://docs.djangoproject.com/en/5.2/ref/settings/#databases
 
-DATABASES = {
-    'default': {
-        'ENGINE': 'django.db.backends.sqlite3',
-        'NAME': BASE_DIR / 'db.sqlite3',
+DATABASE_URL = os.environ.get('DATABASE_URL')
+
+if DATABASE_URL:
+    DATABASES = {
+        'default': dj_database_url.parse(
+            DATABASE_URL,
+            conn_max_age=600,
+            conn_health_checks=True,
+        )
     }
-}
+else:
+    DATABASES = {
+        'default': {
+            'ENGINE': 'django.db.backends.sqlite3',
+            'NAME': BASE_DIR / 'db.sqlite3',
+        }
+    }
 
 
 # Password validation
