@@ -1,0 +1,66 @@
+{% extends "dashboard/base.html" %}
+
+{% block title %}Overview | AIoT Dashboard{% endblock %}
+
+{% block content %}
+<div class="page-title">
+  <div>
+    <h1>Overview</h1>
+    <div class="muted">Single ESP32 gateway, environment readings, outputs, and commands.</div>
+  </div>
+  {% if esp32.connected %}
+    <span class="status ok">ESP32 connected</span>
+  {% else %}
+    <span class="status bad">ESP32 offline</span>
+  {% endif %}
+</div>
+
+<section class="grid stats">
+  <div class="panel">
+    <div class="stat-label">Temperature</div>
+    <div class="stat-value">{{ latest_reading.temperature|default:"--" }}</div>
+  </div>
+  <div class="panel">
+    <div class="stat-label">Humidity</div>
+    <div class="stat-value">{{ latest_reading.humidity|default:"--" }}</div>
+  </div>
+  <div class="panel">
+    <div class="stat-label">Light</div>
+    <div class="stat-value">{{ latest_reading.light|default:"--" }}</div>
+  </div>
+  <div class="panel">
+    <div class="stat-label">Audio Chunks</div>
+    <div class="stat-value">{{ esp32.audio_chunks_received }}</div>
+  </div>
+</section>
+
+<section class="grid stats">
+  <div class="panel">
+    <div class="stat-label">Sensor Rows</div>
+    <div class="stat-value">{{ readings_count }}</div>
+  </div>
+  <div class="panel">
+    <div class="stat-label">Outputs</div>
+    <div class="stat-value">{{ outputs_count }}</div>
+  </div>
+  <div class="panel">
+    <div class="stat-label">Commands</div>
+    <div class="stat-value">{{ commands_count }}</div>
+  </div>
+  <div class="panel">
+    <div class="stat-label">Enabled Rules</div>
+    <div class="stat-value">{{ enabled_rules_count }}</div>
+  </div>
+</section>
+
+<section class="grid two">
+  <div class="panel">
+    <h2>Recent Sensor Readings</h2>
+    {% include "dashboard/partials/readings_table.html" with readings=recent_readings %}
+  </div>
+  <div class="panel">
+    <h2>Recent Commands</h2>
+    {% include "dashboard/partials/commands_table.html" with commands=recent_commands %}
+  </div>
+</section>
+{% endblock %}

@@ -1,0 +1,24 @@
+{% if readings %}
+  <table>
+    <thead>
+      <tr>
+        <th>Time</th>
+        <th>Temperature</th>
+        <th>Humidity</th>
+        <th>Light</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for reading in readings %}
+        <tr>
+          <td>{{ reading.created_at }}</td>
+          <td>{{ reading.temperature|default:"--" }}</td>
+          <td>{{ reading.humidity|default:"--" }}</td>
+          <td>{{ reading.light|default:"--" }}</td>
+        </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+{% else %}
+  <div class="empty">No sensor readings yet.</div>
+{% endif %}

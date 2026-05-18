@@ -1,0 +1,26 @@
+{% if commands %}
+  <table>
+    <thead>
+      <tr>
+        <th>Time</th>
+        <th>Command</th>
+        <th>Target</th>
+        <th>Status</th>
+        <th>Params</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for command in commands %}
+        <tr>
+          <td>{{ command.created_at }}</td>
+          <td><code>{{ command.name }}</code></td>
+          <td>{{ command.target|default:"--" }}</td>
+          <td><span class="status warn">{{ command.status }}</span></td>
+          <td><pre>{{ command.params }}</pre></td>
+        </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+{% else %}
+  <div class="empty">No commands yet.</div>
+{% endif %}

@@ -1,0 +1,49 @@
+{% extends "dashboard/base.html" %}
+
+{% block title %}Controls | AIoT Dashboard{% endblock %}
+
+{% block content %}
+<div class="page-title">
+  <div>
+    <h1>Controls</h1>
+    <div class="muted">Configured outputs such as LED, fan, relay, or pump.</div>
+  </div>
+</div>
+
+<div class="panel">
+  {% if outputs %}
+    <table>
+      <thead>
+        <tr>
+          <th>Key</th>
+          <th>Name</th>
+          <th>Kind</th>
+          <th>Enabled</th>
+          <th>Current State</th>
+          <th>Updated</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for output in outputs %}
+          <tr>
+            <td><code>{{ output.key }}</code></td>
+            <td>{{ output.name }}</td>
+            <td>{{ output.kind }}</td>
+            <td>
+              {% if output.is_enabled %}
+                <span class="status ok">enabled</span>
+              {% else %}
+                <span class="status bad">disabled</span>
+              {% endif %}
+            </td>
+            <td><pre>{{ output.current_state }}</pre></td>
+            <td>{{ output.updated_at }}</td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  {% else %}
+    <div class="empty">No outputs yet. Add outputs in Django Admin, for example key <code>led</code> or <code>fan</code>.</div>
+  {% endif %}
+</div>
+{% endblock %}

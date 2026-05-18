@@ -1,0 +1,16 @@
+{% extends "dashboard/base.html" %}
+
+{% block title %}Sensors | AIoT Dashboard{% endblock %}
+
+{% block content %}
+<div class="page-title">
+  <div>
+    <h1>Sensors</h1>
+    <div class="muted">Latest 100 readings received from ESP32.</div>
+  </div>
+</div>
+
+<div class="panel">
+  {% include "dashboard/partials/readings_table.html" %}
+</div>
+{% endblock %}

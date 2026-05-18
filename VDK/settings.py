@@ -60,6 +60,7 @@ INSTALLED_APPS = [
     'monitoring',
     'control',
     'automation',
+    'dashboard',
     'django.contrib.admin',
     'django.contrib.auth',
     'django.contrib.contenttypes',

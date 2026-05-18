@@ -1,0 +1,16 @@
+{% extends "dashboard/base.html" %}
+
+{% block title %}Commands | AIoT Dashboard{% endblock %}
+
+{% block content %}
+<div class="page-title">
+  <div>
+    <h1>Commands</h1>
+    <div class="muted">Latest 100 commands sent from the server to ESP32.</div>
+  </div>
+</div>
+
+<div class="panel">
+  {% include "dashboard/partials/commands_table.html" %}
+</div>
+{% endblock %}

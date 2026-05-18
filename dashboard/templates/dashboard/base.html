@@ -1,0 +1,210 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}AIoT Dashboard{% endblock %}</title>
+  <style>
+    :root {
+      --bg: #f6f7f9;
+      --panel: #ffffff;
+      --line: #d9dee7;
+      --text: #1e2430;
+      --muted: #657184;
+      --accent: #0b6bcb;
+      --ok: #147d46;
+      --warn: #9f5b00;
+      --bad: #b42318;
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--text);
+      font: 14px/1.45 system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+
+    a { color: inherit; text-decoration: none; }
+
+    .app {
+      display: grid;
+      grid-template-columns: 220px minmax(0, 1fr);
+      min-height: 100vh;
+    }
+
+    .sidebar {
+      background: #202734;
+      color: #f8fafc;
+      padding: 20px 14px;
+    }
+
+    .brand {
+      font-size: 18px;
+      font-weight: 700;
+      margin: 0 8px 22px;
+    }
+
+    .nav {
+      display: grid;
+      gap: 4px;
+    }
+
+    .nav a {
+      border-radius: 6px;
+      color: #dbe2ee;
+      display: block;
+      padding: 10px 12px;
+    }
+
+    .nav a:hover,
+    .nav a.active {
+      background: #313b4d;
+      color: #ffffff;
+    }
+
+    .main {
+      min-width: 0;
+      padding: 24px;
+    }
+
+    .page-title {
+      align-items: end;
+      display: flex;
+      justify-content: space-between;
+      gap: 16px;
+      margin-bottom: 20px;
+    }
+
+    h1 {
+      font-size: 26px;
+      line-height: 1.2;
+      margin: 0;
+    }
+
+    h2 {
+      font-size: 17px;
+      margin: 0 0 12px;
+    }
+
+    .muted { color: var(--muted); }
+
+    .grid {
+      display: grid;
+      gap: 16px;
+    }
+
+    .grid.stats {
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      margin-bottom: 16px;
+    }
+
+    .grid.two {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+
+    .panel {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 16px;
+    }
+
+    .stat-label {
+      color: var(--muted);
+      font-size: 12px;
+      text-transform: uppercase;
+    }
+
+    .stat-value {
+      font-size: 26px;
+      font-weight: 700;
+      margin-top: 6px;
+    }
+
+    .status {
+      border-radius: 999px;
+      display: inline-block;
+      font-size: 12px;
+      font-weight: 700;
+      padding: 3px 8px;
+    }
+
+    .status.ok { background: #e7f6ed; color: var(--ok); }
+    .status.bad { background: #fdecec; color: var(--bad); }
+    .status.warn { background: #fff4df; color: var(--warn); }
+
+    table {
+      border-collapse: collapse;
+      width: 100%;
+    }
+
+    th,
+    td {
+      border-bottom: 1px solid var(--line);
+      padding: 10px 8px;
+      text-align: left;
+      vertical-align: top;
+    }
+
+    th {
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 700;
+      text-transform: uppercase;
+    }
+
+    tr:last-child td { border-bottom: 0; }
+
+    code,
+    pre {
+      background: #eef2f7;
+      border-radius: 6px;
+      font-family: Consolas, "Liberation Mono", monospace;
+      font-size: 12px;
+    }
+
+    code { padding: 2px 5px; }
+
+    pre {
+      margin: 0;
+      max-width: 520px;
+      overflow: auto;
+      padding: 8px;
+      white-space: pre-wrap;
+    }
+
+    .empty {
+      color: var(--muted);
+      padding: 18px 0;
+    }
+
+    @media (max-width: 900px) {
+      .app { grid-template-columns: 1fr; }
+      .sidebar { position: static; }
+      .grid.stats,
+      .grid.two { grid-template-columns: 1fr; }
+      .main { padding: 16px; }
+    }
+  </style>
+</head>
+<body>
+  <div class="app">
+    <aside class="sidebar">
+      <div class="brand">AIoT Monitor</div>
+      <nav class="nav">
+        <a href="{% url 'dashboard:overview' %}" {% if request.resolver_match.url_name == 'overview' %}class="active"{% endif %}>Overview</a>
+        <a href="{% url 'dashboard:sensors' %}" {% if request.resolver_match.url_name == 'sensors' %}class="active"{% endif %}>Sensors</a>
+        <a href="{% url 'dashboard:controls' %}" {% if request.resolver_match.url_name == 'controls' %}class="active"{% endif %}>Controls</a>
+        <a href="{% url 'dashboard:commands' %}" {% if request.resolver_match.url_name == 'commands' %}class="active"{% endif %}>Commands</a>
+        <a href="{% url 'dashboard:rules' %}" {% if request.resolver_match.url_name == 'rules' %}class="active"{% endif %}>Rules</a>
+        <a href="/admin/">Admin</a>
+      </nav>
+    </aside>
+    <main class="main">
+      {% block content %}{% endblock %}
+    </main>
+  </div>
+</body>
+</html>

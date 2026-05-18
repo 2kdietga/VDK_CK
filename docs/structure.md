@@ -28,6 +28,11 @@ control/
 automation/
   models.py     AutomationRule model
   admin.py      rule admin
+
+dashboard/
+  views.py      server-rendered pages for overview, sensors, controls, commands, rules
+  urls.py       dashboard routes under /dashboard/
+  templates/    HTML templates for the UI
 ```
 
 The root URL file has only one API mount:
@@ -51,3 +56,12 @@ POST /api/esp32/commands/
 WS   /ws/esp32/
 ```
 
+The human-facing pages are:
+
+```text
+GET /dashboard/
+GET /dashboard/sensors/
+GET /dashboard/controls/
+GET /dashboard/commands/
+GET /dashboard/rules/
+```

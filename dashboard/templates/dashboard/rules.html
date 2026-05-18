@@ -1,0 +1,47 @@
+{% extends "dashboard/base.html" %}
+
+{% block title %}Rules | AIoT Dashboard{% endblock %}
+
+{% block content %}
+<div class="page-title">
+  <div>
+    <h1>Rules</h1>
+    <div class="muted">Automation rules prepared for the rule engine.</div>
+  </div>
+</div>
+
+<div class="panel">
+  {% if rules %}
+    <table>
+      <thead>
+        <tr>
+          <th>Name</th>
+          <th>Enabled</th>
+          <th>Conditions</th>
+          <th>Action</th>
+          <th>Updated</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for rule in rules %}
+          <tr>
+            <td>{{ rule.name }}</td>
+            <td>
+              {% if rule.is_enabled %}
+                <span class="status ok">enabled</span>
+              {% else %}
+                <span class="status bad">disabled</span>
+              {% endif %}
+            </td>
+            <td><pre>{{ rule.conditions }}</pre></td>
+            <td><pre>{{ rule.action }}</pre></td>
+            <td>{{ rule.updated_at }}</td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  {% else %}
+    <div class="empty">No automation rules yet.</div>
+  {% endif %}
+</div>
+{% endblock %}
