@@ -10,8 +10,8 @@ from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
 
-DEFAULT_GROQ_MODEL = 'llama-3.1-8b-instant'
-GROQ_ENDPOINT = 'https://api.groq.com/openai/v1/chat/completions'
+DEFAULT_OPENROUTER_MODEL = 'qwen/qwen-2.5-7b-instruct:free'
+OPENROUTER_ENDPOINT = 'https://openrouter.ai/api/v1/chat/completions'
 ALLOWED_ACTION_DEVICES = {'fan', 'led'}
 ALLOWED_ACTION_COMMANDS = {'ON', 'OFF', 'PLAY'}
 IOT_INTENT_PROMPT = '''Ban la tro ly AIoT.
@@ -52,10 +52,10 @@ class LLMResponse:
 
 
 def chat_with_llm(message: str) -> LLMResponse:
-    provider = os.environ.get('LLM_PROVIDER', 'groq').lower()
+    provider = os.environ.get('LLM_PROVIDER', 'openrouter').lower()
 
-    if provider == 'groq':
-        return chat_with_groq(message)
+    if provider == 'openrouter':
+        return chat_with_openrouter(message)
 
     raise LLMConfigurationError(f'Unsupported LLM_PROVIDER: {provider}')
 
@@ -80,12 +80,12 @@ def parse_iot_intent(user_text: str) -> dict[str, str]:
     }
 
 
-def chat_with_groq(message: str) -> LLMResponse:
-    api_key = os.environ.get('GROQ_API_KEY')
+def chat_with_openrouter(message: str) -> LLMResponse:
+    api_key = os.environ.get('OPENROUTER_API_KEY')
     if not api_key:
-        raise LLMConfigurationError('GROQ_API_KEY is not configured.')
+        raise LLMConfigurationError('OPENROUTER_API_KEY is not configured.')
 
-    model = os.environ.get('GROQ_MODEL', DEFAULT_GROQ_MODEL)
+    model = os.environ.get('OPENROUTER_MODEL', DEFAULT_OPENROUTER_MODEL)
     min_interval_seconds = env_float('LLM_MIN_REQUEST_INTERVAL_SECONDS', 2.0)
     payload = {
         'model': model,
@@ -99,11 +99,13 @@ def chat_with_groq(message: str) -> LLMResponse:
     }
 
     request = Request(
-        GROQ_ENDPOINT,
+        OPENROUTER_ENDPOINT,
         data=json.dumps(payload).encode('utf-8'),
         headers={
             'Content-Type': 'application/json',
             'Authorization': f'Bearer {api_key}',
+            'HTTP-Referer': os.environ.get('OPENROUTER_SITE_URL', 'http://localhost'),
+            'X-Title': os.environ.get('OPENROUTER_APP_NAME', 'AIoT Monitor'),
         },
         method='POST',
     )
@@ -115,17 +117,17 @@ def chat_with_groq(message: str) -> LLMResponse:
             raw = json.loads(response.read().decode('utf-8'))
     except HTTPError as exc:
         body = exc.read().decode('utf-8', errors='replace')
-        raise LLMProviderError(f'Groq API error {exc.code}: {body}') from exc
+        raise LLMProviderError(f'OpenRouter API error {exc.code}: {body}') from exc
     except URLError as exc:
-        raise LLMProviderError(f'Could not connect to Groq API: {exc.reason}') from exc
+        raise LLMProviderError(f'Could not connect to OpenRouter API: {exc.reason}') from exc
 
-    return LLMResponse(text=extract_groq_text(raw), raw=raw)
+    return LLMResponse(text=extract_openrouter_text(raw), raw=raw)
 
 
-def extract_groq_text(raw: dict[str, Any]) -> str:
+def extract_openrouter_text(raw: dict[str, Any]) -> str:
     text = raw.get('choices', [{}])[0].get('message', {}).get('content', '').strip()
     if not text:
-        raise LLMProviderError('Groq API returned no text.')
+        raise LLMProviderError('OpenRouter API returned no text.')
     return text
 
 

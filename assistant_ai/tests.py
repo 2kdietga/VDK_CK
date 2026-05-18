@@ -3,7 +3,7 @@ from unittest.mock import patch
 
 from django.test import Client, TestCase
 
-from .services import extract_groq_text, parse_json_object, wait_between_llm_requests
+from .services import extract_openrouter_text, parse_json_object, wait_between_llm_requests
 
 
 class LLMIntentApiTests(TestCase):
@@ -16,8 +16,8 @@ class LLMIntentApiTests(TestCase):
 
         self.assertEqual(response.status_code, 400)
 
-    def test_intent_api_reports_missing_groq_api_key(self):
-        with patch.dict('os.environ', {'LLM_PROVIDER': 'groq', 'GROQ_API_KEY': ''}):
+    def test_intent_api_reports_missing_openrouter_api_key(self):
+        with patch.dict('os.environ', {'LLM_PROVIDER': 'openrouter', 'OPENROUTER_API_KEY': ''}):
             response = Client().post(
                 '/api/llm/intent/',
                 data=json.dumps({'text': 'Trời nóng quá'}),
@@ -25,7 +25,7 @@ class LLMIntentApiTests(TestCase):
             )
 
         self.assertEqual(response.status_code, 500)
-        self.assertIn('GROQ_API_KEY', response.json()['error'])
+        self.assertIn('OPENROUTER_API_KEY', response.json()['error'])
 
     @patch('assistant_ai.views.parse_iot_intent')
     def test_intent_api_returns_action_json(self, parse_iot_intent):
@@ -56,8 +56,8 @@ class LLMIntentApiTests(TestCase):
 
         self.assertEqual(parsed['action_device'], 'fan')
 
-    def test_extract_groq_text(self):
-        text = extract_groq_text(
+    def test_extract_openrouter_text(self):
+        text = extract_openrouter_text(
             {
                 'choices': [
                     {
