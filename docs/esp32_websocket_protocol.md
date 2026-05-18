@@ -63,6 +63,25 @@ Server response:
 
 ## Server -> ESP32
 
+Voice command text can be parsed by the LLM intent endpoint before sending a command to ESP32:
+
+```powershell
+Invoke-RestMethod `
+  -Method Post `
+  -Uri http://127.0.0.1:8000/api/llm/intent/ `
+  -ContentType application/json `
+  -Body '{"text":"Troi nong qua"}'
+```
+
+Expected response:
+
+```json
+{
+  "action_device": "fan",
+  "action_command": "ON"
+}
+```
+
 Send a command through HTTP while the ESP32 WebSocket is connected:
 
 ```powershell
@@ -124,6 +143,10 @@ For deploy, set:
 DJANGO_DEBUG=False
 DJANGO_SECRET_KEY=<strong-secret>
 DJANGO_ALLOWED_HOSTS=<your-domain>,<your-server-ip>
+LLM_PROVIDER=groq
+GROQ_API_KEY=<your-groq-api-key>
+GROQ_MODEL=llama-3.1-8b-instant
+LLM_MIN_REQUEST_INTERVAL_SECONDS=2
 ```
 
 ## Minimal ESP32 Message Flow

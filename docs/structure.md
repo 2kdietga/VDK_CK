@@ -33,6 +33,11 @@ dashboard/
   views.py      server-rendered pages for overview, sensors, controls, commands, rules
   urls.py       dashboard routes under /dashboard/
   templates/    HTML templates for the UI
+
+assistant_ai/
+  services.py   Groq REST API client
+  views.py      intent parser API for voice transcript text
+  urls.py       POST /api/llm/intent/
 ```
 
 The root URL file has only one API mount:
@@ -46,6 +51,7 @@ Then `VDK/api_urls.py` gathers the app-level API routes:
 ```python
 path('', include('gateway.urls'))
 path('', include('control.urls'))
+path('', include('assistant_ai.urls'))
 ```
 
 So the public API stays simple:
