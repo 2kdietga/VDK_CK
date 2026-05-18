@@ -99,23 +99,11 @@ TEMPLATES = [
 WSGI_APPLICATION = 'VDK.wsgi.application'
 ASGI_APPLICATION = 'VDK.asgi.application'
 
-CHANNEL_REDIS_URL = os.environ.get('CHANNEL_REDIS_URL')
-
-if CHANNEL_REDIS_URL:
-    CHANNEL_LAYERS = {
-        'default': {
-            'BACKEND': 'channels_redis.core.RedisChannelLayer',
-            'CONFIG': {
-                'hosts': [CHANNEL_REDIS_URL],
-            },
-        },
-    }
-else:
-    CHANNEL_LAYERS = {
-        'default': {
-            'BACKEND': 'channels.layers.InMemoryChannelLayer',
-        },
-    }
+CHANNEL_LAYERS = {
+    'default': {
+        'BACKEND': 'channels.layers.InMemoryChannelLayer',
+    },
+}
 
 
 # Database

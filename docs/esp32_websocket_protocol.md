@@ -107,14 +107,20 @@ GET http://127.0.0.1:8000/api/esp32/
 
 ## Local And Deploy Settings
 
-Localhost can run without Redis. If `CHANNEL_REDIS_URL` is not set, Django uses the in-memory channel layer.
+The project uses Django Channels with the in-memory channel layer. This is enough for the intended demo setup:
+
+```text
+1 Django server
+1 ESP32 board
+1 dashboard for demo
+no multi-server scaling
+```
 
 When testing from a physical ESP32 through LAN, add your computer IP to `DJANGO_ALLOWED_HOSTS`.
 
-For deploy or multi-process ASGI, set:
+For deploy, set:
 
 ```text
-CHANNEL_REDIS_URL=redis://<redis-host>:6379/0
 DJANGO_DEBUG=False
 DJANGO_SECRET_KEY=<strong-secret>
 DJANGO_ALLOWED_HOSTS=<your-domain>,<your-server-ip>
