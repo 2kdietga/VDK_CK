@@ -5,7 +5,10 @@ import uuid
 from json import JSONDecodeError
 from typing import Any
 
+from channels.db import database_sync_to_async
 from channels.generic.websocket import AsyncWebsocketConsumer
+
+from monitoring.models import SensorReading
 
 from .protocol import (
     ESP32_GROUP_NAME,
@@ -67,6 +70,7 @@ class ESP32Consumer(AsyncWebsocketConsumer):
                 return
 
             state.latest_sensor = data
+            await self.save_sensor_reading(data)
             return
 
         if message_type == MESSAGE_STATUS:
@@ -106,6 +110,15 @@ class ESP32Consumer(AsyncWebsocketConsumer):
             }
         )
 
+    @database_sync_to_async
+    def save_sensor_reading(self, data: dict[str, Any]) -> None:
+        SensorReading.objects.create(
+            temperature=coerce_float(data.get('temperature')),
+            humidity=coerce_float(data.get('humidity')),
+            light=coerce_float(data.get('light')),
+            raw_data=data,
+        )
+
 
 def build_command(name: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
     return {
@@ -114,3 +127,13 @@ def build_command(name: str, params: dict[str, Any] | None = None) -> dict[str, 
         'name': name,
         'params': params or {},
     }
+
+
+def coerce_float(value: Any) -> float | None:
+    if value is None:
+        return None
+
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None

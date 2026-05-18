@@ -6,16 +6,14 @@ from json import JSONDecodeError
 from asgiref.sync import async_to_sync
 from channels.layers import get_channel_layer
 from django.http import HttpRequest, JsonResponse
+from django.utils import timezone
 from django.views.decorators.csrf import csrf_exempt
-from django.views.decorators.http import require_GET, require_POST
+from django.views.decorators.http import require_POST
 
-from .consumers import build_command
-from .protocol import ESP32_GROUP_NAME, get_esp32_state
+from gateway.consumers import build_command
+from gateway.protocol import ESP32_GROUP_NAME
 
-
-@require_GET
-def esp32_state(request: HttpRequest) -> JsonResponse:
-    return JsonResponse(get_esp32_state().as_dict())
+from .models import CommandLog, OutputTarget
 
 
 @csrf_exempt
@@ -36,8 +34,29 @@ def send_command(request: HttpRequest) -> JsonResponse:
         return JsonResponse({'error': '`params` must be an object.'}, status=400)
 
     command = build_command(name=name, params=params)
+    target = params.get('target', '')
+    if not isinstance(target, str):
+        target = ''
+
     channel_layer = get_channel_layer()
     async_to_sync(channel_layer.group_send)(ESP32_GROUP_NAME, command)
+    sent_at = timezone.now()
+
+    CommandLog.objects.create(
+        command_id=command['command_id'],
+        name=name,
+        target=target,
+        params=params,
+        source=CommandLog.Source.MANUAL,
+        status=CommandLog.Status.SENT,
+        sent_at=sent_at,
+    )
+
+    if name == 'set_output' and target:
+        OutputTarget.objects.filter(key=target, is_enabled=True).update(
+            current_state=params,
+            updated_at=sent_at,
+        )
 
     return JsonResponse(
         {

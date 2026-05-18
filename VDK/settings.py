@@ -56,7 +56,10 @@ ALLOWED_HOSTS = env_list('DJANGO_ALLOWED_HOSTS', ['127.0.0.1', 'localhost'])
 INSTALLED_APPS = [
     'daphne',
     'channels',
-    'iot',
+    'gateway',
+    'monitoring',
+    'control',
+    'automation',
     'django.contrib.admin',
     'django.contrib.auth',
     'django.contrib.contenttypes',
