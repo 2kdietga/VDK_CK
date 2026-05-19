@@ -3,7 +3,7 @@ from unittest.mock import patch
 
 from django.test import Client, TestCase
 
-from .services import extract_openrouter_text, parse_json_object, wait_between_llm_requests
+from .services import extract_groq_text, parse_json_object, wait_between_llm_requests
 
 
 class LLMIntentApiTests(TestCase):
@@ -16,8 +16,8 @@ class LLMIntentApiTests(TestCase):
 
         self.assertEqual(response.status_code, 400)
 
-    def test_intent_api_reports_missing_openrouter_api_key(self):
-        with patch.dict('os.environ', {'LLM_PROVIDER': 'openrouter', 'OPENROUTER_API_KEY': ''}):
+    def test_intent_api_reports_missing_groq_api_key(self):
+        with patch.dict('os.environ', {'LLM_PROVIDER': 'groq', 'GROQ_API_KEY': ''}):
             response = Client().post(
                 '/api/llm/intent/',
                 data=json.dumps({'text': 'Trời nóng quá'}),
@@ -25,13 +25,14 @@ class LLMIntentApiTests(TestCase):
             )
 
         self.assertEqual(response.status_code, 500)
-        self.assertIn('OPENROUTER_API_KEY', response.json()['error'])
+        self.assertIn('GROQ_API_KEY', response.json()['error'])
 
     @patch('assistant_ai.views.parse_iot_intent')
     def test_intent_api_returns_action_json(self, parse_iot_intent):
         parse_iot_intent.return_value = {
-            'action_device': 'fan',
-            'action_command': 'ON',
+            'action': 'turn_on',
+            'device': 'fan',
+            'reply_message': 'Đã bật quạt.',
         }
 
         response = Client().post(
@@ -44,32 +45,33 @@ class LLMIntentApiTests(TestCase):
         self.assertEqual(
             response.json(),
             {
-                'action_device': 'fan',
-                'action_command': 'ON',
+                'action': 'turn_on',
+                'device': 'fan',
+                'reply_message': 'Đã bật quạt.',
             },
         )
 
     def test_parse_json_object_handles_markdown_fence(self):
         parsed = parse_json_object(
-            '```json\n{"action_device": "fan", "action_command": "ON"}\n```'
+            '```json\n{"action": "turn_on", "device": "fan", "reply_message": "Đã bật quạt."}\n```'
         )
 
-        self.assertEqual(parsed['action_device'], 'fan')
+        self.assertEqual(parsed['device'], 'fan')
 
-    def test_extract_openrouter_text(self):
-        text = extract_openrouter_text(
+    def test_extract_groq_text(self):
+        text = extract_groq_text(
             {
                 'choices': [
                     {
                         'message': {
-                            'content': '{"action_device":"fan","action_command":"ON"}',
+                            'content': '{"action":"turn_on","device":"fan","reply_message":"Đã bật quạt."}',
                         }
                     }
                 ]
             }
         )
 
-        self.assertIn('action_device', text)
+        self.assertIn('turn_on', text)
 
     @patch('assistant_ai.services.time.sleep')
     @patch('assistant_ai.services.time.monotonic')

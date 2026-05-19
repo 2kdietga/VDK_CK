@@ -35,7 +35,7 @@ dashboard/
   templates/    HTML templates for the UI
 
 assistant_ai/
-  services.py   OpenRouter REST API client
+  services.py   Groq REST API client
   views.py      intent parser API for voice transcript text
   urls.py       POST /api/llm/intent/
 ```

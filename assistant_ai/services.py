@@ -6,28 +6,28 @@ import threading
 import time
 from dataclasses import dataclass
 from typing import Any
-from urllib.error import HTTPError, URLError
-from urllib.request import Request, urlopen
+
+from groq import Groq
 
 
-DEFAULT_OPENROUTER_MODEL = 'qwen/qwen-2.5-7b-instruct:free'
-OPENROUTER_ENDPOINT = 'https://openrouter.ai/api/v1/chat/completions'
-ALLOWED_ACTION_DEVICES = {'fan', 'led'}
-ALLOWED_ACTION_COMMANDS = {'ON', 'OFF', 'PLAY'}
-IOT_INTENT_PROMPT = '''Ban la tro ly AIoT.
-Ban chi duoc phep dieu khien cac thiet bi co ma trong danh sach sau: fan, led.
+DEFAULT_GROQ_MODEL = 'llama-3.1-8b-instant'
+ALLOWED_ACTIONS = {'turn_on', 'turn_off', 'get_status'}
+ALLOWED_DEVICES = {'light', 'fan', 'sensor'}
+IOT_INTENT_SYSTEM_PROMPT = '''Bạn là trợ lý hệ thống AIoT giám sát môi trường.
+Nhiệm vụ của bạn là phân tích câu nói của người dùng và trả về ĐÚNG MỘT định dạng JSON, không kèm văn bản giải thích nào khác.
 
-Hay phan tich cau lenh cua nguoi dung va chi tra ve JSON hop le dung dang:
-{{"action_device": "ma_thiet_bi", "action_command": "ON/OFF/PLAY"}}
+Cấu trúc JSON bắt buộc:
+{
+  "action": "turn_on" | "turn_off" | "get_status",
+  "device": "light" | "fan" | "sensor",
+  "reply_message": "Câu phản hồi ngắn gọn để phát ra loa cho người dùng"
+}
 
-Quy tac:
-- "nong", "oi", "can lam mat" thuong la bat quat: fan ON.
-- "toi", "thieu sang" thuong la bat den: led ON.
-- "tat den" la led OFF.
-- "tat quat" la fan OFF.
-- Khong them markdown, khong boc trong ```json, khong giai thich.
-
-Cau lenh nguoi dung: "{user_text}"'''
+Quy tắc:
+- Câu có ý nóng, oi, cần làm mát thường là bật quạt: {"action":"turn_on","device":"fan"}.
+- Câu có ý tối, thiếu sáng thường là bật đèn: {"action":"turn_on","device":"light"}.
+- Câu hỏi nhiệt độ, độ ẩm, ánh sáng, môi trường hiện tại là lấy trạng thái cảm biến: {"action":"get_status","device":"sensor"}.
+- Chỉ dùng đúng các action và device trong cấu trúc bắt buộc.'''
 
 _last_llm_request_at = 0.0
 _llm_rate_limit_lock = threading.Lock()
@@ -52,82 +52,76 @@ class LLMResponse:
 
 
 def chat_with_llm(message: str) -> LLMResponse:
-    provider = os.environ.get('LLM_PROVIDER', 'openrouter').lower()
+    provider = os.environ.get('LLM_PROVIDER', 'groq').lower()
 
-    if provider == 'openrouter':
-        return chat_with_openrouter(message)
+    if provider == 'groq':
+        return chat_with_groq(message)
 
     raise LLMConfigurationError(f'Unsupported LLM_PROVIDER: {provider}')
 
 
 def parse_iot_intent(user_text: str) -> dict[str, str]:
-    prompt = IOT_INTENT_PROMPT.format(user_text=user_text.replace('"', '\\"'))
-    response = chat_with_llm(prompt)
+    response = chat_with_llm(user_text)
     parsed = parse_json_object(response.text)
 
-    action_device = parsed.get('action_device')
-    action_command = parsed.get('action_command')
+    action = parsed.get('action')
+    device = parsed.get('device')
+    reply_message = parsed.get('reply_message')
 
-    if action_device not in ALLOWED_ACTION_DEVICES:
-        raise LLMIntentParseError(f'Invalid action_device: {action_device!r}')
+    if action not in ALLOWED_ACTIONS:
+        raise LLMIntentParseError(f'Invalid action: {action!r}')
 
-    if action_command not in ALLOWED_ACTION_COMMANDS:
-        raise LLMIntentParseError(f'Invalid action_command: {action_command!r}')
+    if device not in ALLOWED_DEVICES:
+        raise LLMIntentParseError(f'Invalid device: {device!r}')
+
+    if not isinstance(reply_message, str) or not reply_message.strip():
+        raise LLMIntentParseError('reply_message must be a non-empty string.')
 
     return {
-        'action_device': action_device,
-        'action_command': action_command,
+        'action': action,
+        'device': device,
+        'reply_message': reply_message.strip(),
     }
 
 
-def chat_with_openrouter(message: str) -> LLMResponse:
-    api_key = os.environ.get('OPENROUTER_API_KEY')
+def chat_with_groq(message: str) -> LLMResponse:
+    api_key = os.environ.get('GROQ_API_KEY')
     if not api_key:
-        raise LLMConfigurationError('OPENROUTER_API_KEY is not configured.')
+        raise LLMConfigurationError('GROQ_API_KEY is not configured.')
 
-    model = os.environ.get('OPENROUTER_MODEL', DEFAULT_OPENROUTER_MODEL)
+    model = os.environ.get('GROQ_MODEL', DEFAULT_GROQ_MODEL)
     min_interval_seconds = env_float('LLM_MIN_REQUEST_INTERVAL_SECONDS', 2.0)
-    payload = {
-        'model': model,
-        'messages': [
-            {
-                'role': 'user',
-                'content': message,
-            }
-        ],
-        'temperature': 0,
-    }
-
-    request = Request(
-        OPENROUTER_ENDPOINT,
-        data=json.dumps(payload).encode('utf-8'),
-        headers={
-            'Content-Type': 'application/json',
-            'Authorization': f'Bearer {api_key}',
-            'HTTP-Referer': os.environ.get('OPENROUTER_SITE_URL', 'http://localhost'),
-            'X-Title': os.environ.get('OPENROUTER_APP_NAME', 'AIoT Monitor'),
-        },
-        method='POST',
-    )
 
     try:
         wait_between_llm_requests(min_interval_seconds)
+        client = Groq(api_key=api_key)
+        completion = client.chat.completions.create(
+            model=model,
+            messages=[
+                {
+                    'role': 'system',
+                    'content': IOT_INTENT_SYSTEM_PROMPT,
+                },
+                {
+                    'role': 'user',
+                    'content': message,
+                },
+            ],
+            response_format={'type': 'json_object'},
+            temperature=0.2,
+            max_tokens=150,
+        )
+    except Exception as exc:
+        raise LLMProviderError(f'Groq API error: {exc}') from exc
 
-        with urlopen(request, timeout=30) as response:
-            raw = json.loads(response.read().decode('utf-8'))
-    except HTTPError as exc:
-        body = exc.read().decode('utf-8', errors='replace')
-        raise LLMProviderError(f'OpenRouter API error {exc.code}: {body}') from exc
-    except URLError as exc:
-        raise LLMProviderError(f'Could not connect to OpenRouter API: {exc.reason}') from exc
-
-    return LLMResponse(text=extract_openrouter_text(raw), raw=raw)
+    raw = completion.model_dump()
+    return LLMResponse(text=extract_groq_text(raw), raw=raw)
 
 
-def extract_openrouter_text(raw: dict[str, Any]) -> str:
+def extract_groq_text(raw: dict[str, Any]) -> str:
     text = raw.get('choices', [{}])[0].get('message', {}).get('content', '').strip()
     if not text:
-        raise LLMProviderError('OpenRouter API returned no text.')
+        raise LLMProviderError('Groq API returned no text.')
     return text
 
 

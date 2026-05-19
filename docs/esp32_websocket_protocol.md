@@ -77,8 +77,9 @@ Expected response:
 
 ```json
 {
-  "action_device": "fan",
-  "action_command": "ON"
+  "action": "turn_on",
+  "device": "fan",
+  "reply_message": "Da bat quat."
 }
 ```
 
@@ -143,11 +144,9 @@ For deploy, set:
 DJANGO_DEBUG=False
 DJANGO_SECRET_KEY=<strong-secret>
 DJANGO_ALLOWED_HOSTS=<your-domain>,<your-server-ip>
-LLM_PROVIDER=openrouter
-OPENROUTER_API_KEY=<your-openrouter-api-key>
-OPENROUTER_MODEL=qwen/qwen-2.5-7b-instruct:free
-OPENROUTER_SITE_URL=<your-render-url>
-OPENROUTER_APP_NAME=AIoT Monitor
+LLM_PROVIDER=groq
+GROQ_API_KEY=<your-groq-api-key>
+GROQ_MODEL=llama-3.1-8b-instant
 LLM_MIN_REQUEST_INTERVAL_SECONDS=2
 ```
 
