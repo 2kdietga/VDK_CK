@@ -61,6 +61,23 @@ Server response:
 }
 ```
 
+After ESP32 executes a server command, it must send a command ACK. The server uses this message to mark the command as completed or failed and to save the output state in the database.
+
+```json
+{
+  "type": "command_ack",
+  "command_id": "generated-id",
+  "status": "completed",
+  "params": {
+    "target": "led",
+    "state": true,
+    "value": 80
+  }
+}
+```
+
+Use `status: "failed"` if ESP32 could not execute the command.
+
 ## Server -> ESP32
 
 Voice command text can be parsed by the LLM intent endpoint before sending a command to ESP32:
@@ -102,7 +119,8 @@ ESP32 receives:
   "name": "set_output",
   "params": {
     "target": "led",
-    "state": true
+    "state": true,
+    "value": 80
   }
 }
 ```
@@ -157,4 +175,5 @@ LLM_MIN_REQUEST_INTERVAL_SECONDS=2
 3. Send binary audio chunks when recording voice.
 4. Send `ping` only when firmware wants to check that the connection is alive.
 5. Listen for `command` messages from the server.
-6. Execute command params such as `{"target":"led","state":true}`.
+6. Execute command params such as `{"target":"led","state":true,"value":80}`.
+7. Send `command_ack` with the same `command_id` after execution.

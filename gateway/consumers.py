@@ -7,11 +7,14 @@ from typing import Any
 
 from channels.db import database_sync_to_async
 from channels.generic.websocket import AsyncWebsocketConsumer
+from django.utils import timezone
 
+from control.models import CommandLog, OutputTarget
 from monitoring.models import SensorReading
 
 from .protocol import (
     ESP32_GROUP_NAME,
+    MESSAGE_COMMAND_ACK,
     MESSAGE_PING,
     MESSAGE_SENSOR_DATA,
     MESSAGE_STATUS,
@@ -79,11 +82,34 @@ class ESP32Consumer(AsyncWebsocketConsumer):
             state.last_status = payload
             return
 
+        if message_type == MESSAGE_COMMAND_ACK:
+            await self.handle_command_ack(payload)
+            return
+
         if message_type == MESSAGE_PING:
             await self.send_json({'type': 'pong'})
             return
 
         await self.send_error('unknown_type', f'Unsupported message type: {message_type!r}.')
+
+    async def handle_command_ack(self, payload: dict[str, Any]) -> None:
+        command_id = payload.get('command_id')
+        if not isinstance(command_id, str) or not command_id:
+            await self.send_error('invalid_command_ack', '`command_id` is required for command_ack.')
+            return
+
+        status = payload.get('status', CommandLog.Status.COMPLETED)
+        if status not in {CommandLog.Status.COMPLETED, CommandLog.Status.FAILED}:
+            status = CommandLog.Status.COMPLETED
+
+        params = payload.get('params')
+        if params is not None and not isinstance(params, dict):
+            await self.send_error('invalid_command_ack', '`params` must be an object when provided.')
+            return
+
+        updated = await self.apply_command_ack(command_id, status, params)
+        if not updated:
+            await self.send_error('unknown_command', f'No command found for command_id: {command_id}.')
 
     async def server_command(self, event: dict[str, Any]) -> None:
         await self.send_json(
@@ -121,6 +147,33 @@ class ESP32Consumer(AsyncWebsocketConsumer):
             raw_data=data,
         )
 
+    @database_sync_to_async
+    def apply_command_ack(
+        self,
+        command_id: str,
+        status: str,
+        ack_params: dict[str, Any] | None,
+    ) -> bool:
+        try:
+            command = CommandLog.objects.get(command_id=command_id)
+        except CommandLog.DoesNotExist:
+            return False
+
+        completed_at = timezone.now()
+        command.status = status
+        command.completed_at = completed_at
+        command.save(update_fields=['status', 'completed_at'])
+
+        params = ack_params if ack_params is not None else command.params
+        target = params.get('target') or command.target
+        if status == CommandLog.Status.COMPLETED and command.name == 'set_output' and target:
+            OutputTarget.objects.filter(key=target, is_enabled=True).update(
+                current_state=params,
+                updated_at=completed_at,
+            )
+
+        return True
+
 
 def build_command(name: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
     return {
@@ -129,4 +182,3 @@ def build_command(name: str, params: dict[str, Any] | None = None) -> dict[str, 
         'name': name,
         'params': params or {},
     }
-

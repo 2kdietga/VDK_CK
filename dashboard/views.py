@@ -48,8 +48,20 @@ def sensors(request):
 
 @require_GET
 def controls(request):
+    outputs = list(OutputTarget.objects.all())
     context = {
-        'outputs': OutputTarget.objects.all(),
+        'outputs': outputs,
+        'controls_data': [
+            {
+                'key': output.key,
+                'name': output.name,
+                'kind': output.kind,
+                'is_enabled': output.is_enabled,
+                'current_state': output.current_state,
+                'updated_at': output.updated_at.isoformat(),
+            }
+            for output in outputs
+        ],
     }
     return render(request, 'dashboard/controls.html', context)
 

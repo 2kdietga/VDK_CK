@@ -38,6 +38,16 @@ key=fan, name=Fan, kind=fan
 
 Commands use `params.target` to match `OutputTarget.key`.
 
+`current_state` is updated only after ESP32 sends `command_ack` for a completed command. Example state:
+
+```json
+{
+  "target": "fan",
+  "state": true,
+  "value": 65
+}
+```
+
 ## control.CommandLog
 
 Stores every command sent from the server to ESP32.
@@ -56,7 +66,15 @@ sent_at
 completed_at
 ```
 
-Current command status is usually `sent` because the protocol does not require ACK.
+Command status flow:
+
+```text
+sent      after the HTTP API sends the command to the ESP32 WebSocket group
+completed after ESP32 sends command_ack with status completed
+failed    after ESP32 sends command_ack with status failed
+```
+
+The server stores `completed_at` when ACK is received.
 
 ## automation.AutomationRule
 
@@ -84,4 +102,3 @@ Example condition/action shape:
 ```
 
 The rule shape stays in JSON while the rule engine is still evolving.
-

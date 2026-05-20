@@ -259,7 +259,8 @@ Turn LED on:
   "name": "set_output",
   "params": {
     "target": "led",
-    "state": true
+    "state": true,
+    "value": 80
   }
 }
 ```
@@ -271,7 +272,8 @@ Turn LED off:
   "name": "set_output",
   "params": {
     "target": "led",
-    "state": false
+    "state": false,
+    "value": 0
   }
 }
 ```
@@ -283,7 +285,8 @@ Turn fan on:
   "name": "set_output",
   "params": {
     "target": "fan",
-    "state": true
+    "state": true,
+    "value": 65
   }
 }
 ```
@@ -295,7 +298,8 @@ Turn fan off:
   "name": "set_output",
   "params": {
     "target": "fan",
-    "state": false
+    "state": false,
+    "value": 0
   }
 }
 ```
@@ -305,11 +309,13 @@ HTTP response:
 ```json
 {
   "queued": true,
+  "awaiting_ack": true,
   "command_id": "generated-command-id",
   "name": "set_output",
   "params": {
     "target": "fan",
-    "state": true
+    "state": true,
+    "value": 65
   }
 }
 ```
@@ -323,7 +329,23 @@ ESP32 receives over WebSocket:
   "name": "set_output",
   "params": {
     "target": "fan",
-    "state": true
+    "state": true,
+    "value": 65
+  }
+}
+```
+
+After executing the command, ESP32 must send ACK over the same WebSocket:
+
+```json
+{
+  "type": "command_ack",
+  "command_id": "generated-command-id",
+  "status": "completed",
+  "params": {
+    "target": "fan",
+    "state": true,
+    "value": 65
   }
 }
 ```
@@ -332,8 +354,10 @@ Server behavior:
 
 ```text
 1. Sends command to the ESP32 WebSocket group
-2. Creates a control.CommandLog row
-3. Updates OutputTarget.current_state if target exists and is enabled
+2. Creates a control.CommandLog row with status sent
+3. Waits for ESP32 command_ack
+4. Updates CommandLog status/completed_at from ACK
+5. Updates OutputTarget.current_state only after completed ACK
 ```
 
 View logs:
@@ -341,6 +365,35 @@ View logs:
 ```text
 GET /dashboard/commands/
 GET /dashboard/controls/
+```
+
+Check command ACK/status from the web UI:
+
+```text
+GET /api/esp32/commands/<command_id>/
+```
+
+Example response after ACK:
+
+```json
+{
+  "command_id": "generated-command-id",
+  "name": "set_output",
+  "target": "fan",
+  "params": {
+    "target": "fan",
+    "state": true,
+    "value": 65
+  },
+  "status": "completed",
+  "sent_at": "2026-05-20T00:00:00+00:00",
+  "completed_at": "2026-05-20T00:00:02+00:00",
+  "output_state": {
+    "target": "fan",
+    "state": true,
+    "value": 65
+  }
+}
 ```
 
 ## Flow 8: Full Voice Control Demo
@@ -424,4 +477,3 @@ Start command:
 ```bash
 python manage.py migrate && daphne -b 0.0.0.0 -p $PORT VDK.asgi:application
 ```
-

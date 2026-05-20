@@ -6,44 +6,250 @@
 <div class="page-title">
   <div>
     <h1>Controls</h1>
-    <div class="muted">Configured outputs such as LED, fan, relay, or pump.</div>
+    <div class="muted">Adjust LED brightness and fan speed, then send commands to ESP32.</div>
   </div>
 </div>
 
-<div class="panel">
-  {% if outputs %}
-    <table>
-      <thead>
+{% if outputs %}
+  <section class="grid two">
+    {% for output in outputs %}
+      {% if output.key == "led" or output.key == "fan" %}
+        <div class="panel control-card" data-control-card="{{ output.key }}">
+          <div class="control-top">
+            <div>
+              <div class="control-name">{{ output.name }}</div>
+              <div class="muted"><code>{{ output.key }}</code> / {{ output.kind }}</div>
+            </div>
+            {% if output.is_enabled %}
+              <span class="status ok" data-state-label="{{ output.key }}">enabled</span>
+            {% else %}
+              <span class="status bad">disabled</span>
+            {% endif %}
+          </div>
+
+          <div class="slider-row">
+            <input
+              type="range"
+              min="0"
+              max="100"
+              step="1"
+              value="{{ output.current_state.value|default:0 }}"
+              data-control-slider="{{ output.key }}"
+              {% if not output.is_enabled %}disabled{% endif %}
+            >
+            <strong><span data-control-value="{{ output.key }}">{{ output.current_state.value|default:0 }}</span>%</strong>
+          </div>
+
+          <div class="control-actions">
+            <button
+              type="button"
+              data-control-on="{{ output.key }}"
+              {% if not output.is_enabled %}disabled{% endif %}
+            >On</button>
+            <button
+              class="danger"
+              type="button"
+              data-control-off="{{ output.key }}"
+              {% if not output.is_enabled %}disabled{% endif %}
+            >Off</button>
+          </div>
+
+          <div class="control-feedback" data-control-feedback="{{ output.key }}">
+            Current state: {% if output.current_state.state %}on{% else %}off{% endif %}, value {{ output.current_state.value|default:0 }}%.
+          </div>
+        </div>
+      {% endif %}
+    {% endfor %}
+  </section>
+{% else %}
+  <div class="panel">
+    <div class="empty">No outputs yet. Run migrations or add outputs in Django Admin with key <code>led</code> and <code>fan</code>.</div>
+  </div>
+{% endif %}
+
+<div class="panel" style="margin-top: 16px;">
+  <h2>Configured Outputs</h2>
+  <table>
+    <thead>
+      <tr>
+        <th>Key</th>
+        <th>Name</th>
+        <th>Kind</th>
+        <th>Enabled</th>
+        <th>Current State</th>
+        <th>Updated</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for output in outputs %}
         <tr>
-          <th>Key</th>
-          <th>Name</th>
-          <th>Kind</th>
-          <th>Enabled</th>
-          <th>Current State</th>
-          <th>Updated</th>
+          <td><code>{{ output.key }}</code></td>
+          <td>{{ output.name }}</td>
+          <td>{{ output.kind }}</td>
+          <td>
+            {% if output.is_enabled %}
+              <span class="status ok">enabled</span>
+            {% else %}
+              <span class="status bad">disabled</span>
+            {% endif %}
+          </td>
+          <td><pre>{{ output.current_state }}</pre></td>
+          <td>{{ output.updated_at }}</td>
         </tr>
-      </thead>
-      <tbody>
-        {% for output in outputs %}
-          <tr>
-            <td><code>{{ output.key }}</code></td>
-            <td>{{ output.name }}</td>
-            <td>{{ output.kind }}</td>
-            <td>
-              {% if output.is_enabled %}
-                <span class="status ok">enabled</span>
-              {% else %}
-                <span class="status bad">disabled</span>
-              {% endif %}
-            </td>
-            <td><pre>{{ output.current_state }}</pre></td>
-            <td>{{ output.updated_at }}</td>
-          </tr>
-        {% endfor %}
-      </tbody>
-    </table>
-  {% else %}
-    <div class="empty">No outputs yet. Add outputs in Django Admin, for example key <code>led</code> or <code>fan</code>.</div>
-  {% endif %}
+      {% endfor %}
+    </tbody>
+  </table>
 </div>
+
+{{ controls_data|json_script:"controls-data" }}
+<script>
+  const controls = JSON.parse(document.getElementById('controls-data').textContent);
+  const controlState = new Map(
+    controls.map((control) => {
+      const state = control.current_state || {};
+      return [
+        control.key,
+        {
+          state: Boolean(state.state),
+          value: Number.isFinite(Number(state.value)) ? Number(state.value) : 0,
+          pendingCommandId: null,
+          sendTimer: null,
+        },
+      ];
+    })
+  );
+
+  function updateControlUi(key, message) {
+    const state = controlState.get(key);
+    if (!state) return;
+
+    const slider = document.querySelector(`[data-control-slider="${key}"]`);
+    const value = document.querySelector(`[data-control-value="${key}"]`);
+    const feedback = document.querySelector(`[data-control-feedback="${key}"]`);
+    const label = document.querySelector(`[data-state-label="${key}"]`);
+
+    if (slider) slider.value = state.value;
+    if (value) value.textContent = state.value;
+    if (label) {
+      label.textContent = state.state ? 'on' : 'off';
+      label.className = state.state ? 'status ok' : 'status warn';
+    }
+    if (feedback) {
+      feedback.textContent = message || `Current state: ${state.state ? 'on' : 'off'}, value ${state.value}%.`;
+    }
+  }
+
+  function scheduleControlCommand(key) {
+    const state = controlState.get(key);
+    if (!state) return;
+    if (state.sendTimer) {
+      clearTimeout(state.sendTimer);
+    }
+    updateControlUi(key, 'Value changed. Sending shortly...');
+    state.sendTimer = setTimeout(() => {
+      state.sendTimer = null;
+      sendControlCommand(key);
+    }, 500);
+  }
+
+  async function sendControlCommand(key, forcedState) {
+    const state = controlState.get(key);
+    if (!state) return;
+    if (state.sendTimer) {
+      clearTimeout(state.sendTimer);
+      state.sendTimer = null;
+    }
+
+    const slider = document.querySelector(`[data-control-slider="${key}"]`);
+    state.value = Number(slider ? slider.value : state.value);
+    if (typeof forcedState === 'boolean') {
+      state.state = forcedState;
+      if (!forcedState) state.value = 0;
+      if (forcedState && state.value === 0) state.value = 100;
+    } else {
+      state.state = state.value > 0;
+    }
+
+    updateControlUi(key, 'Sending command to ESP32...');
+
+    try {
+      const response = await fetch('/api/esp32/commands/', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name: 'set_output',
+          params: {
+            target: key,
+            state: state.state,
+            value: state.value,
+          },
+        }),
+      });
+      const body = await response.json();
+      if (!response.ok) {
+        updateControlUi(key, body.error || 'Command failed.');
+        return;
+      }
+
+      state.pendingCommandId = body.command_id;
+      updateControlUi(key, `Command ${body.command_id} sent. Waiting for ESP32 ACK.`);
+      pollCommandStatus(key, body.command_id);
+    } catch (error) {
+      console.error(error);
+      updateControlUi(key, 'Cannot send command.');
+    }
+  }
+
+  async function pollCommandStatus(key, commandId) {
+    for (let attempt = 0; attempt < 30; attempt += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 1000));
+      const state = controlState.get(key);
+      if (!state || state.pendingCommandId !== commandId) return;
+
+      try {
+        const response = await fetch(`/api/esp32/commands/${commandId}/`, { cache: 'no-store' });
+        if (!response.ok) continue;
+        const body = await response.json();
+        if (body.status !== 'completed' && body.status !== 'failed') continue;
+
+        if (body.output_state) {
+          state.state = Boolean(body.output_state.state);
+          state.value = Number.isFinite(Number(body.output_state.value)) ? Number(body.output_state.value) : state.value;
+        }
+        state.pendingCommandId = null;
+        updateControlUi(key, body.status === 'completed' ? 'ESP32 ACK received. State saved.' : 'ESP32 reported command failed.');
+        return;
+      } catch (error) {
+        console.error(error);
+      }
+    }
+
+    const state = controlState.get(key);
+    if (state && state.pendingCommandId === commandId) {
+      updateControlUi(key, 'Still waiting for ESP32 ACK.');
+    }
+  }
+
+  document.querySelectorAll('[data-control-slider]').forEach((slider) => {
+    slider.addEventListener('input', () => {
+      const key = slider.dataset.controlSlider;
+      const state = controlState.get(key);
+      if (!state) return;
+      state.value = Number(slider.value);
+      state.state = state.value > 0;
+      updateControlUi(key);
+      scheduleControlCommand(key);
+    });
+  });
+
+  document.querySelectorAll('[data-control-on]').forEach((button) => {
+    button.addEventListener('click', () => sendControlCommand(button.dataset.controlOn, true));
+  });
+
+  document.querySelectorAll('[data-control-off]').forEach((button) => {
+    button.addEventListener('click', () => sendControlCommand(button.dataset.controlOff, false));
+  });
+
+  controls.forEach((control) => updateControlUi(control.key));
+</script>
 {% endblock %}
