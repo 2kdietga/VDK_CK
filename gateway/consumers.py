@@ -15,6 +15,7 @@ from .protocol import (
     MESSAGE_PING,
     MESSAGE_SENSOR_DATA,
     MESSAGE_STATUS,
+    coerce_float,
     get_esp32_state,
 )
 
@@ -69,8 +70,9 @@ class ESP32Consumer(AsyncWebsocketConsumer):
                 await self.send_error('invalid_sensor_data', '`data` must be an object.')
                 return
 
-            state.latest_sensor = data
-            await self.save_sensor_reading(data)
+            averaged_data = state.record_sensor_sample(data)
+            if averaged_data is not None:
+                await self.save_sensor_reading(averaged_data)
             return
 
         if message_type == MESSAGE_STATUS:
@@ -128,12 +130,3 @@ def build_command(name: str, params: dict[str, Any] | None = None) -> dict[str, 
         'params': params or {},
     }
 
-
-def coerce_float(value: Any) -> float | None:
-    if value is None:
-        return None
-
-    try:
-        return float(value)
-    except (TypeError, ValueError):
-        return None

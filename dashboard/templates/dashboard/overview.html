@@ -6,7 +6,7 @@
 <div class="page-title">
   <div>
     <h1>Overview</h1>
-    <div class="muted">Single ESP32 gateway, environment readings, outputs, and commands.</div>
+    <div class="muted">Realtime ESP32 data kept in RAM for the current server process.</div>
   </div>
   {% if esp32.connected %}
     <span class="status ok">ESP32 connected</span>
@@ -18,15 +18,15 @@
 <section class="grid stats">
   <div class="panel">
     <div class="stat-label">Temperature</div>
-    <div class="stat-value">{{ latest_reading.temperature|default:"--" }}</div>
+    <div class="stat-value"><span id="latest-temperature">{{ latest_sensor.temperature|default:"--" }}</span></div>
   </div>
   <div class="panel">
     <div class="stat-label">Humidity</div>
-    <div class="stat-value">{{ latest_reading.humidity|default:"--" }}</div>
+    <div class="stat-value"><span id="latest-humidity">{{ latest_sensor.humidity|default:"--" }}</span></div>
   </div>
   <div class="panel">
     <div class="stat-label">Light</div>
-    <div class="stat-value">{{ latest_reading.light|default:"--" }}</div>
+    <div class="stat-value"><span id="latest-light">{{ latest_sensor.light|default:"--" }}</span></div>
   </div>
   <div class="panel">
     <div class="stat-label">Audio Chunks</div>
@@ -53,14 +53,197 @@
   </div>
 </section>
 
-<section class="grid two">
-  <div class="panel">
-    <h2>Recent Sensor Readings</h2>
-    {% include "dashboard/partials/readings_table.html" with readings=recent_readings %}
+<section class="panel chart-panel">
+  <div class="chart-header">
+    <h2>Realtime Sensor Stream</h2>
+    <span class="muted">RAM buffer, not database history</span>
   </div>
+  <canvas class="chart-canvas" id="realtime-chart" height="260"></canvas>
+</section>
+
+<section class="grid three" style="margin-top: 16px;">
+  <div class="panel chart-panel">
+    <div class="chart-header">
+      <h2>Temperature</h2>
+      <span class="chart-value" id="temperature-value">{{ latest_sensor.temperature|default:"--" }}</span>
+    </div>
+    <canvas class="chart-canvas" id="temperature-chart" height="180"></canvas>
+  </div>
+  <div class="panel chart-panel">
+    <div class="chart-header">
+      <h2>Humidity</h2>
+      <span class="chart-value" id="humidity-value">{{ latest_sensor.humidity|default:"--" }}</span>
+    </div>
+    <canvas class="chart-canvas" id="humidity-chart" height="180"></canvas>
+  </div>
+  <div class="panel chart-panel">
+    <div class="chart-header">
+      <h2>Light</h2>
+      <span class="chart-value" id="light-value">{{ latest_sensor.light|default:"--" }}</span>
+    </div>
+    <canvas class="chart-canvas" id="light-chart" height="180"></canvas>
+  </div>
+</section>
+
+<section class="grid two" style="margin-top: 16px;">
   <div class="panel">
     <h2>Recent Commands</h2>
     {% include "dashboard/partials/commands_table.html" with commands=recent_commands %}
   </div>
+  <div class="panel">
+    <h2>Average Window</h2>
+    <table>
+      <tbody>
+        <tr>
+          <th>Window</th>
+          <td>{{ esp32.sensor_average.window_seconds }} seconds</td>
+        </tr>
+        <tr>
+          <th>Samples</th>
+          <td id="average-samples">{{ esp32.sensor_average.sample_count }}</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
 </section>
+
+{{ realtime_chart_data|json_script:"realtime-chart-data" }}
+<script>
+  const initialSamples = JSON.parse(document.getElementById('realtime-chart-data').textContent);
+  let realtimeSamples = Array.isArray(initialSamples) ? initialSamples : [];
+  const colors = {
+    temperature: '#b42318',
+    humidity: '#0b6bcb',
+    light: '#147d46',
+  };
+
+  function formatValue(value) {
+    if (value === null || value === undefined || Number.isNaN(Number(value))) {
+      return '--';
+    }
+    return Number(value).toFixed(1);
+  }
+
+  function resizeCanvas(canvas) {
+    const ratio = window.devicePixelRatio || 1;
+    const rect = canvas.getBoundingClientRect();
+    const width = Math.max(320, Math.floor(rect.width * ratio));
+    const height = Math.max(140, Math.floor(rect.height * ratio));
+    if (canvas.width !== width || canvas.height !== height) {
+      canvas.width = width;
+      canvas.height = height;
+    }
+    return { width, height };
+  }
+
+  function drawChart(canvasId, samples, fields) {
+    const canvas = document.getElementById(canvasId);
+    if (!canvas) return;
+    const ctx = canvas.getContext('2d');
+    const { width, height } = resizeCanvas(canvas);
+    const padding = { top: 18, right: 18, bottom: 26, left: 44 };
+    const plotWidth = width - padding.left - padding.right;
+    const plotHeight = height - padding.top - padding.bottom;
+    const visibleSamples = samples.slice(-120);
+    const values = [];
+
+    fields.forEach((field) => {
+      visibleSamples.forEach((sample) => {
+        const value = Number(sample[field]);
+        if (!Number.isNaN(value)) values.push(value);
+      });
+    });
+
+    ctx.clearRect(0, 0, width, height);
+    ctx.fillStyle = '#f8fafc';
+    ctx.fillRect(0, 0, width, height);
+
+    ctx.strokeStyle = '#d9dee7';
+    ctx.lineWidth = 1;
+    for (let i = 0; i <= 4; i += 1) {
+      const y = padding.top + (plotHeight / 4) * i;
+      ctx.beginPath();
+      ctx.moveTo(padding.left, y);
+      ctx.lineTo(width - padding.right, y);
+      ctx.stroke();
+    }
+
+    if (values.length === 0) {
+      ctx.fillStyle = '#657184';
+      ctx.font = '14px system-ui, sans-serif';
+      ctx.fillText('Waiting for ESP32 data', padding.left, height / 2);
+      return;
+    }
+
+    let min = Math.min(...values);
+    let max = Math.max(...values);
+    if (min === max) {
+      min -= 1;
+      max += 1;
+    }
+    const scaleY = (value) => padding.top + (max - value) / (max - min) * plotHeight;
+    const scaleX = (index) => {
+      if (visibleSamples.length <= 1) return padding.left;
+      return padding.left + (index / (visibleSamples.length - 1)) * plotWidth;
+    };
+
+    ctx.fillStyle = '#657184';
+    ctx.font = '12px system-ui, sans-serif';
+    ctx.fillText(max.toFixed(1), 8, padding.top + 4);
+    ctx.fillText(min.toFixed(1), 8, height - padding.bottom);
+
+    fields.forEach((field) => {
+      ctx.strokeStyle = colors[field];
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      let hasPoint = false;
+      visibleSamples.forEach((sample, index) => {
+        const value = Number(sample[field]);
+        if (Number.isNaN(value)) return;
+        const x = scaleX(index);
+        const y = scaleY(value);
+        if (!hasPoint) {
+          ctx.moveTo(x, y);
+          hasPoint = true;
+        } else {
+          ctx.lineTo(x, y);
+        }
+      });
+      ctx.stroke();
+    });
+  }
+
+  function renderRealtime() {
+    const latest = realtimeSamples[realtimeSamples.length - 1] || {};
+    document.getElementById('latest-temperature').textContent = formatValue(latest.temperature);
+    document.getElementById('latest-humidity').textContent = formatValue(latest.humidity);
+    document.getElementById('latest-light').textContent = formatValue(latest.light);
+    document.getElementById('temperature-value').textContent = formatValue(latest.temperature);
+    document.getElementById('humidity-value').textContent = formatValue(latest.humidity);
+    document.getElementById('light-value').textContent = formatValue(latest.light);
+    drawChart('realtime-chart', realtimeSamples, ['temperature', 'humidity', 'light']);
+    drawChart('temperature-chart', realtimeSamples, ['temperature']);
+    drawChart('humidity-chart', realtimeSamples, ['humidity']);
+    drawChart('light-chart', realtimeSamples, ['light']);
+  }
+
+  async function refreshRealtime() {
+    try {
+      const response = await fetch('/api/esp32/', { cache: 'no-store' });
+      if (!response.ok) return;
+      const data = await response.json();
+      realtimeSamples = Array.isArray(data.realtime_sensor_samples) ? data.realtime_sensor_samples : [];
+      if (data.sensor_average) {
+        document.getElementById('average-samples').textContent = data.sensor_average.sample_count ?? 0;
+      }
+      renderRealtime();
+    } catch (error) {
+      console.error(error);
+    }
+  }
+
+  window.addEventListener('resize', renderRealtime);
+  renderRealtime();
+  setInterval(refreshRealtime, 2000);
+</script>
 {% endblock %}

@@ -11,7 +11,17 @@ from monitoring.models import SensorReading
 
 
 class ESP32WebSocketTests(TransactionTestCase):
-    async def test_sensor_payload_is_stored_without_ack(self):
+    def setUp(self):
+        state = get_esp32_state()
+        state.connected = False
+        state.last_seen = None
+        state.latest_sensor = None
+        state.realtime_sensor_samples = []
+        state.last_status = None
+        state.audio_chunks_received = 0
+        state.sensor_accumulator = None
+
+    async def test_sensor_payload_updates_ram_without_immediate_database_write(self):
         communicator = WebsocketCommunicator(application, '/ws/esp32/')
         connected, _ = await communicator.connect()
         self.assertTrue(connected)
@@ -31,10 +41,48 @@ class ESP32WebSocketTests(TransactionTestCase):
 
         state = get_esp32_state()
         self.assertEqual(state.latest_sensor['humidity'], 70.2)
+        self.assertEqual(len(state.realtime_sensor_samples), 1)
+        self.assertEqual(await get_sensor_reading_count(), 0)
+
+        await communicator.disconnect()
+
+    async def test_sensor_payload_is_averaged_before_database_write(self):
+        communicator = WebsocketCommunicator(application, '/ws/esp32/')
+        connected, _ = await communicator.connect()
+        self.assertTrue(connected)
+
+        await communicator.send_json_to(
+            {
+                'type': 'sensor_data',
+                'data': {
+                    'temperature': 30.0,
+                    'humidity': 70.0,
+                    'light': 400,
+                },
+            }
+        )
+        self.assertTrue(await communicator.receive_nothing(timeout=0.05))
+
+        state = get_esp32_state()
+        state.sensor_accumulator.window_started_at -= 181
+
+        await communicator.send_json_to(
+            {
+                'type': 'sensor_data',
+                'data': {
+                    'temperature': 32.0,
+                    'humidity': 72.0,
+                    'light': 420,
+                },
+            }
+        )
+        self.assertTrue(await communicator.receive_nothing(timeout=0.05))
+
         reading = await get_latest_sensor_reading()
-        self.assertEqual(reading['temperature'], 30.5)
-        self.assertEqual(reading['humidity'], 70.2)
-        self.assertEqual(reading['light'], 410.0)
+        self.assertEqual(reading['temperature'], 30.0)
+        self.assertEqual(reading['humidity'], 70.0)
+        self.assertEqual(reading['light'], 400.0)
+        self.assertEqual(reading['sample_count'], 1)
 
         await communicator.disconnect()
 
@@ -103,4 +151,10 @@ def get_latest_sensor_reading():
         'temperature': reading.temperature,
         'humidity': reading.humidity,
         'light': reading.light,
+        'sample_count': reading.raw_data.get('sample_count'),
     }
+
+
+@database_sync_to_async
+def get_sensor_reading_count():
+    return SensorReading.objects.count()
