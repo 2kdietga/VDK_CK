@@ -51,6 +51,8 @@ class ESP32Consumer(AsyncWebsocketConsumer):
         state.connected = True
         state.touch()
 
+        await self.send_latest_output_commands()
+
     async def disconnect(self, close_code: int) -> None:
         await self.channel_layer.group_discard(ESP32_GROUP_NAME, self.channel_name)
 
@@ -159,18 +161,18 @@ class ESP32Consumer(AsyncWebsocketConsumer):
         await asyncio.sleep(0.2)
         await self.send_json({'type': 'audio_done'})
 
-    async def send_voice_command(self, intent: dict[str, str]) -> None:
-        command_name, params = command_from_intent(intent)
-        command = build_command(command_name, params)
+    async def send_voice_command(self, intent: dict[str, Any]) -> None:
+        for command_name, params in commands_from_intent(intent):
+            command = build_command(command_name, params)
 
-        await self.server_command(command)
-        await self.create_command_log(
-            command_id=command['command_id'],
-            name=command_name,
-            target=params.get('target', ''),
-            params=params,
-            source=CommandLog.Source.VOICE,
-        )
+            await self.server_command(command)
+            await self.create_command_log(
+                command_id=command['command_id'],
+                name=command_name,
+                target=params.get('target', ''),
+                params=params,
+                source=CommandLog.Source.VOICE,
+            )
 
     async def send_audio_pcm(self, pcm: bytes) -> None:
         sent = 0
@@ -208,6 +210,11 @@ class ESP32Consumer(AsyncWebsocketConsumer):
                 'params': event.get('params', {}),
             }
         )
+
+    async def send_latest_output_commands(self) -> None:
+        commands = await self.build_latest_output_commands()
+        for command in commands:
+            await self.server_command(command)
 
     async def server_audio(self, event: dict[str, Any]) -> None:
         await self.send(bytes_data=event['bytes'])
@@ -281,6 +288,40 @@ class ESP32Consumer(AsyncWebsocketConsumer):
             sent_at=timezone.now(),
         )
 
+    @database_sync_to_async
+    def build_latest_output_commands(self) -> list[dict[str, Any]]:
+        outputs = {
+            output.key: output
+            for output in OutputTarget.objects.filter(key__in=['led', 'fan'], is_enabled=True)
+        }
+        commands: list[dict[str, Any]] = []
+        sent_at = timezone.now()
+
+        for target in ['led', 'fan']:
+            output = outputs.get(target)
+            if output is None:
+                continue
+
+            params = output.current_state if isinstance(output.current_state, dict) else {}
+            params = {
+                'target': target,
+                'state': bool(params.get('state')),
+                'value': params.get('value', 0),
+            }
+            command = build_command('set_output', params)
+            commands.append(command)
+            CommandLog.objects.create(
+                command_id=command['command_id'],
+                name=command['name'],
+                target=target,
+                params=params,
+                source=CommandLog.Source.SYSTEM,
+                status=CommandLog.Status.SENT,
+                sent_at=sent_at,
+            )
+
+        return commands
+
 
 def build_command(name: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
     return {
@@ -310,3 +351,19 @@ def command_from_intent(intent: dict[str, Any]) -> tuple[str, dict[str, Any]]:
         }
 
     return 'get_status', {'target': device}
+
+
+def commands_from_intent(intent: dict[str, Any]) -> list[tuple[str, dict[str, Any]]]:
+    raw_commands = intent.get('commands')
+    if not isinstance(raw_commands, list):
+        return [command_from_intent(intent)]
+
+    commands = []
+    for raw_command in raw_commands:
+        if isinstance(raw_command, dict):
+            commands.append(command_from_intent(raw_command))
+
+    if not commands:
+        return [command_from_intent(intent)]
+
+    return commands

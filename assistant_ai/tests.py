@@ -7,6 +7,7 @@ from .services import (
     LLMIntentParseError,
     LLMResponse,
     extract_groq_text,
+    parse_intent_commands,
     parse_iot_intent,
     parse_json_object,
     parse_output_value,
@@ -87,6 +88,36 @@ class LLMIntentApiTests(TestCase):
         self.assertEqual(intent['action'], 'turn_on')
         self.assertEqual(intent['device'], 'light')
         self.assertEqual(intent['value'], 50)
+        self.assertEqual(intent['commands'], [{'action': 'turn_on', 'device': 'light', 'value': 50}])
+
+    @patch('assistant_ai.services.chat_with_llm')
+    def test_parse_iot_intent_accepts_multiple_commands(self, chat_with_llm):
+        chat_with_llm.return_value = LLMResponse(
+            text=(
+                '{"commands":['
+                '{"action":"turn_on","device":"fan","value":null},'
+                '{"action":"turn_on","device":"light","value":null}'
+                '],"reply_message":"Da bat quat va den."}'
+            ),
+            raw={},
+        )
+
+        intent = parse_iot_intent('toi nong va troi toi qua')
+
+        self.assertEqual(
+            intent,
+            {
+                'commands': [
+                    {'action': 'turn_on', 'device': 'fan', 'value': None},
+                    {'action': 'turn_on', 'device': 'light', 'value': None},
+                ],
+                'reply_message': 'Da bat quat va den.',
+            },
+        )
+
+    def test_parse_intent_commands_rejects_empty_commands(self):
+        with self.assertRaises(LLMIntentParseError):
+            parse_intent_commands({'commands': [], 'reply_message': 'Khong co lenh.'})
 
     def test_extract_groq_text(self):
         text = extract_groq_text(

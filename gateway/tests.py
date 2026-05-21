@@ -1,3 +1,4 @@
+import asyncio
 import json
 
 from channels.db import database_sync_to_async
@@ -6,7 +7,7 @@ from django.test import Client, TransactionTestCase
 
 from VDK.asgi import application
 from control.models import CommandLog, OutputTarget
-from gateway.consumers import command_from_intent
+from gateway.consumers import command_from_intent, commands_from_intent
 from gateway.protocol import get_esp32_state
 from monitoring.models import SensorReading
 
@@ -21,6 +22,8 @@ class ESP32WebSocketTests(TransactionTestCase):
         state.last_status = None
         state.audio_chunks_received = 0
         state.sensor_accumulator = None
+        OutputTarget.objects.all().delete()
+        CommandLog.objects.all().delete()
 
     async def test_sensor_payload_updates_ram_without_immediate_database_write(self):
         communicator = WebsocketCommunicator(application, '/ws/esp32/')
@@ -38,6 +41,7 @@ class ESP32WebSocketTests(TransactionTestCase):
             }
         )
 
+        await wait_for(lambda: get_esp32_state().latest_sensor is not None)
         self.assertTrue(await communicator.receive_nothing(timeout=0.05))
 
         state = get_esp32_state()
@@ -62,6 +66,7 @@ class ESP32WebSocketTests(TransactionTestCase):
                 },
             }
         )
+        await wait_for(lambda: get_esp32_state().sensor_accumulator is not None)
         self.assertTrue(await communicator.receive_nothing(timeout=0.05))
 
         state = get_esp32_state()
@@ -93,6 +98,7 @@ class ESP32WebSocketTests(TransactionTestCase):
         self.assertTrue(connected)
 
         await communicator.send_to(bytes_data=b'\x00\x01\x02\x03')
+        await wait_for(lambda: get_esp32_state().audio_chunks_received >= 1)
         self.assertTrue(await communicator.receive_nothing(timeout=0.05))
         self.assertGreaterEqual(get_esp32_state().audio_chunks_received, 1)
 
@@ -106,6 +112,22 @@ class ESP32WebSocketTests(TransactionTestCase):
         await communicator.send_json_to({'type': 'ping'})
         response = json.loads(await communicator.receive_from())
         self.assertEqual(response['type'], 'pong')
+
+        await communicator.disconnect()
+
+    async def test_connect_sends_latest_led_and_fan_commands_from_database(self):
+        await create_output_target('led', 'LED', 'light', {'target': 'led', 'state': True, 'value': 70})
+        await create_output_target('fan', 'Fan', 'fan', {'target': 'fan', 'state': True, 'value': 40})
+
+        communicator = WebsocketCommunicator(application, '/ws/esp32/')
+        connected, _ = await communicator.connect()
+        self.assertTrue(connected)
+
+        messages = await receive_initial_sync_commands(communicator)
+        self.assertEqual([message['params']['target'] for message in messages], ['led', 'fan'])
+        self.assertEqual(messages[0]['params'], {'target': 'led', 'state': True, 'value': 70})
+        self.assertEqual(messages[1]['params'], {'target': 'fan', 'state': True, 'value': 40})
+        self.assertEqual(await get_system_command_count(), 2)
 
         await communicator.disconnect()
 
@@ -137,6 +159,25 @@ class VoiceIntentCommandTests(TransactionTestCase):
         self.assertEqual(command_name, 'set_output')
         self.assertEqual(params, {'target': 'fan', 'state': True, 'value': 100})
 
+    def test_multiple_intents_map_to_multiple_output_commands(self):
+        commands = commands_from_intent(
+            {
+                'commands': [
+                    {'action': 'turn_on', 'device': 'fan', 'value': None},
+                    {'action': 'turn_on', 'device': 'light', 'value': None},
+                ],
+                'reply_message': 'Da bat quat va den.',
+            }
+        )
+
+        self.assertEqual(
+            commands,
+            [
+                ('set_output', {'target': 'fan', 'state': True, 'value': 100}),
+                ('set_output', {'target': 'led', 'state': True, 'value': 100}),
+            ],
+        )
+
 
 class ESP32CommandApiTests(TransactionTestCase):
     def setUp(self):
@@ -148,6 +189,8 @@ class ESP32CommandApiTests(TransactionTestCase):
         state.last_status = None
         state.audio_chunks_received = 0
         state.sensor_accumulator = None
+        OutputTarget.objects.all().delete()
+        CommandLog.objects.all().delete()
 
     def test_send_command_creates_command_log_without_updating_output_before_ack(self):
         OutputTarget.objects.update_or_create(
@@ -235,6 +278,7 @@ class ESP32CommandApiTests(TransactionTestCase):
         communicator = WebsocketCommunicator(application, '/ws/esp32/')
         connected, _ = await communicator.connect()
         self.assertTrue(connected)
+        await receive_initial_sync_commands(communicator, count=1)
 
         body = await post_command(
             {
@@ -293,16 +337,40 @@ def get_sensor_reading_count():
 
 
 @database_sync_to_async
-def create_output_target(key, name, kind):
+def create_output_target(key, name, kind, current_state=None):
     OutputTarget.objects.update_or_create(
         key=key,
         defaults={
             'name': name,
             'kind': kind,
-            'current_state': {'target': key, 'state': False, 'value': 0},
+            'current_state': current_state or {'target': key, 'state': False, 'value': 0},
             'is_enabled': True,
         },
     )
+
+
+@database_sync_to_async
+def get_system_command_count():
+    return CommandLog.objects.filter(source=CommandLog.Source.SYSTEM).count()
+
+
+async def receive_initial_sync_commands(communicator, count=2):
+    messages = []
+    for _ in range(count):
+        message = json.loads(await communicator.receive_from())
+        assert message['type'] == 'command'
+        assert message['name'] == 'set_output'
+        messages.append(message)
+    return messages
+
+
+async def wait_for(predicate, timeout=1.0):
+    deadline = asyncio.get_running_loop().time() + timeout
+    while asyncio.get_running_loop().time() < deadline:
+        if predicate():
+            return
+        await asyncio.sleep(0.01)
+    assert predicate()
 
 
 @database_sync_to_async
