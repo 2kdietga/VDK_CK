@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import uuid
 from json import JSONDecodeError
@@ -11,9 +12,23 @@ from django.utils import timezone
 
 from control.models import CommandLog, OutputTarget
 from monitoring.models import SensorReading
+from assistant_ai.services import (
+    LLMConfigurationError,
+    LLMIntentParseError,
+    LLMProviderError,
+    parse_iot_intent,
+)
 
+from .audio import (
+    AudioProcessingError,
+    TTS_CHUNK_BYTES,
+    fallback_tone_pcm,
+    transcribe_pcm_chunks,
+    voicerss_tts_pcm,
+)
 from .protocol import (
     ESP32_GROUP_NAME,
+    MESSAGE_AUDIO_END,
     MESSAGE_COMMAND_ACK,
     MESSAGE_PING,
     MESSAGE_SENSOR_DATA,
@@ -25,6 +40,10 @@ from .protocol import (
 
 class ESP32Consumer(AsyncWebsocketConsumer):
     async def connect(self) -> None:
+        self.audio_chunks: list[bytes] = []
+        self.audio_bytes_received = 0
+        self.audio_reply_tasks: set[asyncio.Task] = set()
+
         await self.channel_layer.group_add(ESP32_GROUP_NAME, self.channel_name)
         await self.accept()
 
@@ -34,6 +53,9 @@ class ESP32Consumer(AsyncWebsocketConsumer):
 
     async def disconnect(self, close_code: int) -> None:
         await self.channel_layer.group_discard(ESP32_GROUP_NAME, self.channel_name)
+
+        for task in self.audio_reply_tasks:
+            task.cancel()
 
         state = get_esp32_state()
         state.connected = False
@@ -45,6 +67,8 @@ class ESP32Consumer(AsyncWebsocketConsumer):
 
         if bytes_data is not None:
             state.audio_chunks_received += 1
+            self.audio_chunks.append(bytes_data)
+            self.audio_bytes_received += len(bytes_data)
             return
 
         if text_data is None:
@@ -86,11 +110,75 @@ class ESP32Consumer(AsyncWebsocketConsumer):
             await self.handle_command_ack(payload)
             return
 
+        if message_type == MESSAGE_AUDIO_END:
+            await self.handle_audio_end()
+            return
+
         if message_type == MESSAGE_PING:
             await self.send_json({'type': 'pong'})
             return
 
         await self.send_error('unknown_type', f'Unsupported message type: {message_type!r}.')
+
+    async def handle_audio_end(self) -> None:
+        if not self.audio_chunks:
+            await self.send_error('empty_audio', 'Received audio_end but no binary audio chunks were buffered.')
+            return
+
+        chunks = self.audio_chunks
+        self.audio_chunks = []
+        self.audio_bytes_received = 0
+
+        task = asyncio.create_task(self.process_audio_and_reply(chunks))
+        self.audio_reply_tasks.add(task)
+        task.add_done_callback(self.audio_reply_tasks.discard)
+
+    async def process_audio_and_reply(self, chunks: list[bytes]) -> None:
+        loop = asyncio.get_running_loop()
+
+        try:
+            user_text = await loop.run_in_executor(None, transcribe_pcm_chunks, chunks)
+            intent = await loop.run_in_executor(None, parse_iot_intent, user_text)
+            await self.send_voice_command(intent)
+            reply_message = intent['reply_message']
+            state = get_esp32_state()
+            state.audio_requests_processed += 1
+        except (AudioProcessingError, LLMConfigurationError, LLMProviderError, LLMIntentParseError) as exc:
+            await self.send_error('voice_processing_failed', str(exc))
+            reply_message = 'Toi chua xu ly duoc yeu cau bang giong noi.'
+
+        await self.send_json({'type': 'stop_listen'})
+
+        try:
+            pcm = await loop.run_in_executor(None, voicerss_tts_pcm, reply_message)
+        except AudioProcessingError as exc:
+            await self.send_error('tts_failed', str(exc))
+            pcm = fallback_tone_pcm()
+
+        await self.send_audio_pcm(pcm)
+        await asyncio.sleep(0.2)
+        await self.send_json({'type': 'audio_done'})
+
+    async def send_voice_command(self, intent: dict[str, str]) -> None:
+        command_name, params = command_from_intent(intent)
+        command = build_command(command_name, params)
+
+        await self.server_command(command)
+        await self.create_command_log(
+            command_id=command['command_id'],
+            name=command_name,
+            target=params.get('target', ''),
+            params=params,
+            source=CommandLog.Source.VOICE,
+        )
+
+    async def send_audio_pcm(self, pcm: bytes) -> None:
+        sent = 0
+        while sent < len(pcm):
+            chunk = pcm[sent : sent + TTS_CHUNK_BYTES]
+            await self.send(bytes_data=chunk)
+            sent += len(chunk)
+            await asyncio.sleep(0.025)
 
     async def handle_command_ack(self, payload: dict[str, Any]) -> None:
         command_id = payload.get('command_id')
@@ -174,6 +262,25 @@ class ESP32Consumer(AsyncWebsocketConsumer):
 
         return True
 
+    @database_sync_to_async
+    def create_command_log(
+        self,
+        command_id: str,
+        name: str,
+        target: str,
+        params: dict[str, Any],
+        source: str,
+    ) -> None:
+        CommandLog.objects.create(
+            command_id=command_id,
+            name=name,
+            target=target if isinstance(target, str) else '',
+            params=params,
+            source=source,
+            status=CommandLog.Status.SENT,
+            sent_at=timezone.now(),
+        )
+
 
 def build_command(name: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
     return {
@@ -182,3 +289,24 @@ def build_command(name: str, params: dict[str, Any] | None = None) -> dict[str, 
         'name': name,
         'params': params or {},
     }
+
+
+def command_from_intent(intent: dict[str, Any]) -> tuple[str, dict[str, Any]]:
+    action = intent['action']
+    device = intent['device']
+    requested_value = intent.get('value')
+
+    if action in {'turn_on', 'turn_off'} and device in {'light', 'fan'}:
+        target = 'led' if device == 'light' else device
+        state = action == 'turn_on'
+        value = requested_value if isinstance(requested_value, int) else 100
+        if not state and requested_value is None:
+            value = 0
+
+        return 'set_output', {
+            'target': target,
+            'state': state,
+            'value': value,
+        }
+
+    return 'get_status', {'target': device}

@@ -43,7 +43,24 @@ ESP32 status is also JSON text. The server stores it and does not send an ACK.
 }
 ```
 
-Audio input is sent as binary WebSocket frames. The server currently counts received chunks and does not send an ACK.
+Audio input is sent as raw PCM binary WebSocket frames:
+
+```text
+PCM 16-bit signed little-endian, mono, 16 kHz
+```
+
+After the last binary frame for one voice request, ESP32 sends:
+
+```json
+{
+  "type": "audio_end"
+}
+```
+
+The server wraps the buffered PCM as an in-memory WAV, transcribes it with
+`speech_recognition`, asks the LLM for an IoT intent, sends the derived command
+to ESP32, converts the LLM `reply_message` to PCM 16-bit mono 16 kHz with
+VoiceRSS, amplifies the PCM, and streams it back as binary WebSocket frames.
 
 Heartbeat is the only request-response message:
 
@@ -96,7 +113,19 @@ Expected response:
 {
   "action": "turn_on",
   "device": "fan",
+  "value": null,
   "reply_message": "Da bat quat."
+}
+```
+
+If the user says a level such as `Bat den do sang 50 phan tram`, the LLM intent can include `value`:
+
+```json
+{
+  "action": "turn_on",
+  "device": "light",
+  "value": 50,
+  "reply_message": "Da bat den 50 phan tram."
 }
 ```
 
@@ -122,6 +151,28 @@ ESP32 receives:
     "state": true,
     "value": 80
   }
+}
+```
+
+During a voice response, ESP32 receives this sequence:
+
+```json
+{
+  "type": "stop_listen"
+}
+```
+
+Then one or more binary PCM frames:
+
+```text
+PCM 16-bit signed little-endian, mono, 16 kHz
+```
+
+Finally:
+
+```json
+{
+  "type": "audio_done"
 }
 ```
 
@@ -166,6 +217,11 @@ LLM_PROVIDER=groq
 GROQ_API_KEY=<your-groq-api-key>
 GROQ_MODEL=llama-3.1-8b-instant
 LLM_MIN_REQUEST_INTERVAL_SECONDS=2
+VOICERSS_API_KEY=<your-voicerss-api-key>
+VOICERSS_LANGUAGE=vi-vn
+VOICERSS_VOICE=Chi
+SPEECH_RECOGNITION_LANGUAGE=vi-VN
+TTS_VOLUME_GAIN=1.8
 ```
 
 ## Minimal ESP32 Message Flow
@@ -173,7 +229,8 @@ LLM_MIN_REQUEST_INTERVAL_SECONDS=2
 1. Connect to `ws://<server-ip>:8000/ws/esp32/`.
 2. Send `sensor_data` every few seconds.
 3. Send binary audio chunks when recording voice.
-4. Send `ping` only when firmware wants to check that the connection is alive.
-5. Listen for `command` messages from the server.
-6. Execute command params such as `{"target":"led","state":true,"value":80}`.
-7. Send `command_ack` with the same `command_id` after execution.
+4. Send `{"type":"audio_end"}` when one recording is complete.
+5. Send `ping` only when firmware wants to check that the connection is alive.
+6. Listen for `command`, `stop_listen`, binary audio, and `audio_done` messages from the server.
+7. Execute command params such as `{"target":"led","state":true,"value":80}`.
+8. Send `command_ack` with the same `command_id` after execution.

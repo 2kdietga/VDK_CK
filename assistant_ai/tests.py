@@ -3,7 +3,15 @@ from unittest.mock import patch
 
 from django.test import Client, TestCase
 
-from .services import extract_groq_text, parse_json_object, wait_between_llm_requests
+from .services import (
+    LLMIntentParseError,
+    LLMResponse,
+    extract_groq_text,
+    parse_iot_intent,
+    parse_json_object,
+    parse_output_value,
+    wait_between_llm_requests,
+)
 
 
 class LLMIntentApiTests(TestCase):
@@ -57,6 +65,28 @@ class LLMIntentApiTests(TestCase):
         )
 
         self.assertEqual(parsed['device'], 'fan')
+
+    def test_parse_output_value_accepts_percentage_string(self):
+        self.assertEqual(parse_output_value('50%'), 50)
+        self.assertEqual(parse_output_value(65.4), 65)
+        self.assertIsNone(parse_output_value(None))
+
+    def test_parse_output_value_rejects_out_of_range_value(self):
+        with self.assertRaises(LLMIntentParseError):
+            parse_output_value(120)
+
+    @patch('assistant_ai.services.chat_with_llm')
+    def test_parse_iot_intent_returns_value(self, chat_with_llm):
+        chat_with_llm.return_value = LLMResponse(
+            text='{"action":"turn_on","device":"light","value":"50%","reply_message":"Da bat den 50 phan tram."}',
+            raw={},
+        )
+
+        intent = parse_iot_intent('bat den do sang 50 phan tram')
+
+        self.assertEqual(intent['action'], 'turn_on')
+        self.assertEqual(intent['device'], 'light')
+        self.assertEqual(intent['value'], 50)
 
     def test_extract_groq_text(self):
         text = extract_groq_text(

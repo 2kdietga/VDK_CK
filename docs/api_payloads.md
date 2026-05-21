@@ -196,7 +196,25 @@ Expected:
 {
   "action": "turn_on",
   "device": "light",
+  "value": null,
   "reply_message": "Da bat den."
+}
+```
+
+```json
+{
+  "text": "Bat den do sang 50 phan tram"
+}
+```
+
+Expected:
+
+```json
+{
+  "action": "turn_on",
+  "device": "light",
+  "value": 50,
+  "reply_message": "Da bat den 50 phan tram."
 }
 ```
 
@@ -221,6 +239,7 @@ Allowed output values:
 ```text
 action: turn_on, turn_off, get_status
 device: light, fan, sensor
+value: number from 0 to 100, or null when no level was requested
 reply_message: any non-empty short string
 ```
 
@@ -429,6 +448,7 @@ device fan -> params.target fan
 device light -> params.target led
 turn_on -> state true
 turn_off -> state false
+value -> params.value when provided, otherwise turn_on uses 100 and turn_off uses 0
 get_status -> read latest sensor state, not implemented as ESP32 command yet
 ```
 

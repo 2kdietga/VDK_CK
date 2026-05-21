@@ -13,21 +13,28 @@ from groq import Groq
 DEFAULT_GROQ_MODEL = 'llama-3.1-8b-instant'
 ALLOWED_ACTIONS = {'turn_on', 'turn_off', 'get_status'}
 ALLOWED_DEVICES = {'light', 'fan', 'sensor'}
-IOT_INTENT_SYSTEM_PROMPT = '''Bạn là trợ lý hệ thống AIoT giám sát môi trường.
-Nhiệm vụ của bạn là phân tích câu nói của người dùng và trả về ĐÚNG MỘT định dạng JSON, không kèm văn bản giải thích nào khác.
+IOT_INTENT_SYSTEM_PROMPT = '''You are an AIoT assistant for an ESP32 environment monitor.
+Analyze the user's Vietnamese voice transcript and return exactly one JSON object.
+Do not include markdown or explanatory text.
 
-Cấu trúc JSON bắt buộc:
+Required JSON shape:
 {
   "action": "turn_on" | "turn_off" | "get_status",
   "device": "light" | "fan" | "sensor",
-  "reply_message": "Câu phản hồi ngắn gọn để phát ra loa cho người dùng"
+  "value": 0-100 | null,
+  "reply_message": "short Vietnamese reply for text-to-speech"
 }
 
-Quy tắc:
-- Câu có ý nóng, oi, cần làm mát thường là bật quạt: {"action":"turn_on","device":"fan"}.
-- Câu có ý tối, thiếu sáng thường là bật đèn: {"action":"turn_on","device":"light"}.
-- Câu hỏi nhiệt độ, độ ẩm, ánh sáng, môi trường hiện tại là lấy trạng thái cảm biến: {"action":"get_status","device":"sensor"}.
-- Chỉ dùng đúng các action và device trong cấu trúc bắt buộc.'''
+Rules:
+- Hot, stuffy, or cooling requests usually mean turn_on fan.
+- Dark, dim, or brightness requests usually mean turn_on light.
+- Questions about temperature, humidity, light level, or environment status mean get_status sensor.
+- If the user says a percentage or level, put it in value as an integer from 0 to 100.
+- Examples: "bat den 50%", "bat den do sang 50", "den nam muoi phan tram" -> {"action":"turn_on","device":"light","value":50}.
+- Examples: "bat quat 70%", "cho quat 70" -> {"action":"turn_on","device":"fan","value":70}.
+- If no percentage or level is mentioned, use "value": null.
+- For turn_off, use "value": 0 unless the user explicitly says another valid value.
+- Only use the allowed action and device values.'''
 
 _last_llm_request_at = 0.0
 _llm_rate_limit_lock = threading.Lock()
@@ -60,12 +67,13 @@ def chat_with_llm(message: str) -> LLMResponse:
     raise LLMConfigurationError(f'Unsupported LLM_PROVIDER: {provider}')
 
 
-def parse_iot_intent(user_text: str) -> dict[str, str]:
+def parse_iot_intent(user_text: str) -> dict[str, Any]:
     response = chat_with_llm(user_text)
     parsed = parse_json_object(response.text)
 
     action = parsed.get('action')
     device = parsed.get('device')
+    value = parse_output_value(parsed.get('value'))
     reply_message = parsed.get('reply_message')
 
     if action not in ALLOWED_ACTIONS:
@@ -80,8 +88,30 @@ def parse_iot_intent(user_text: str) -> dict[str, str]:
     return {
         'action': action,
         'device': device,
+        'value': value,
         'reply_message': reply_message.strip(),
     }
+
+
+def parse_output_value(value: Any) -> int | None:
+    if value is None or value == '':
+        return None
+
+    if isinstance(value, bool):
+        raise LLMIntentParseError('value must be a number from 0 to 100 or null.')
+
+    if isinstance(value, str):
+        value = value.strip().rstrip('%').strip()
+
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError) as exc:
+        raise LLMIntentParseError('value must be a number from 0 to 100 or null.') from exc
+
+    if parsed < 0 or parsed > 100:
+        raise LLMIntentParseError('value must be between 0 and 100.')
+
+    return round(parsed)
 
 
 def chat_with_groq(message: str) -> LLMResponse:
@@ -109,7 +139,7 @@ def chat_with_groq(message: str) -> LLMResponse:
             ],
             response_format={'type': 'json_object'},
             temperature=0.2,
-            max_tokens=150,
+            max_tokens=180,
         )
     except Exception as exc:
         raise LLMProviderError(f'Groq API error: {exc}') from exc

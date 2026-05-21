@@ -6,6 +6,7 @@ from django.test import Client, TransactionTestCase
 
 from VDK.asgi import application
 from control.models import CommandLog, OutputTarget
+from gateway.consumers import command_from_intent
 from gateway.protocol import get_esp32_state
 from monitoring.models import SensorReading
 
@@ -107,6 +108,34 @@ class ESP32WebSocketTests(TransactionTestCase):
         self.assertEqual(response['type'], 'pong')
 
         await communicator.disconnect()
+
+
+class VoiceIntentCommandTests(TransactionTestCase):
+    def test_light_intent_value_maps_to_led_command_value(self):
+        command_name, params = command_from_intent(
+            {
+                'action': 'turn_on',
+                'device': 'light',
+                'value': 50,
+                'reply_message': 'Da bat den 50 phan tram.',
+            }
+        )
+
+        self.assertEqual(command_name, 'set_output')
+        self.assertEqual(params, {'target': 'led', 'state': True, 'value': 50})
+
+    def test_missing_intent_value_keeps_default_command_value(self):
+        command_name, params = command_from_intent(
+            {
+                'action': 'turn_on',
+                'device': 'fan',
+                'value': None,
+                'reply_message': 'Da bat quat.',
+            }
+        )
+
+        self.assertEqual(command_name, 'set_output')
+        self.assertEqual(params, {'target': 'fan', 'state': True, 'value': 100})
 
 
 class ESP32CommandApiTests(TransactionTestCase):

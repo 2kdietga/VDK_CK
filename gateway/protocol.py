@@ -9,6 +9,7 @@ MESSAGE_SENSOR_DATA = 'sensor_data'
 MESSAGE_STATUS = 'status'
 MESSAGE_PING = 'ping'
 MESSAGE_COMMAND_ACK = 'command_ack'
+MESSAGE_AUDIO_END = 'audio_end'
 SENSOR_AVERAGE_WINDOW_SECONDS = 180
 REALTIME_SENSOR_SAMPLE_LIMIT = 120
 
@@ -91,6 +92,7 @@ class ESP32State:
     realtime_sensor_samples: list[dict[str, Any]] | None = None
     last_status: dict[str, Any] | None = None
     audio_chunks_received: int = 0
+    audio_requests_processed: int = 0
     sensor_accumulator: SensorAccumulator | None = None
 
     def touch(self) -> None:
@@ -126,6 +128,7 @@ class ESP32State:
             'realtime_sensor_samples': self.realtime_sensor_samples or [],
             'last_status': self.last_status,
             'audio_chunks_received': self.audio_chunks_received,
+            'audio_requests_processed': self.audio_requests_processed,
             'sensor_average': (
                 self.sensor_accumulator.as_dict()
                 if self.sensor_accumulator is not None
