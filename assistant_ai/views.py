@@ -7,7 +7,13 @@ from django.http import HttpRequest, JsonResponse
 from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_POST
 
-from .services import LLMConfigurationError, LLMIntentParseError, LLMProviderError, parse_iot_intent
+from .services import (
+    LLMConfigurationError,
+    LLMIntentParseError,
+    LLMProviderError,
+    get_current_iot_context,
+    parse_iot_intent,
+)
 
 
 @csrf_exempt
@@ -23,7 +29,7 @@ def intent_api(request: HttpRequest) -> JsonResponse:
         return JsonResponse({'error': '`text` is required and must be a non-empty string.'}, status=400)
 
     try:
-        intent = parse_iot_intent(text.strip())
+        intent = parse_iot_intent(text.strip(), context=get_current_iot_context())
     except LLMConfigurationError as exc:
         return JsonResponse({'error': str(exc)}, status=500)
     except LLMProviderError as exc:

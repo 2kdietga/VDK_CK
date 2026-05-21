@@ -16,6 +16,7 @@ from assistant_ai.services import (
     LLMConfigurationError,
     LLMIntentParseError,
     LLMProviderError,
+    get_current_iot_context,
     parse_iot_intent,
 )
 
@@ -140,7 +141,8 @@ class ESP32Consumer(AsyncWebsocketConsumer):
 
         try:
             user_text = await loop.run_in_executor(None, transcribe_pcm_chunks, chunks)
-            intent = await loop.run_in_executor(None, parse_iot_intent, user_text)
+            context = await self.get_iot_context()
+            intent = await loop.run_in_executor(None, parse_iot_intent, user_text, context)
             await self.send_voice_command(intent)
             reply_message = intent['reply_message']
             state = get_esp32_state()
@@ -287,6 +289,10 @@ class ESP32Consumer(AsyncWebsocketConsumer):
             status=CommandLog.Status.SENT,
             sent_at=timezone.now(),
         )
+
+    @database_sync_to_async
+    def get_iot_context(self) -> dict[str, Any]:
+        return get_current_iot_context()
 
     @database_sync_to_async
     def build_latest_output_commands(self) -> list[dict[str, Any]]:

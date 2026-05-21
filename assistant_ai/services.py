@@ -4,6 +4,7 @@ import json
 import os
 import threading
 import time
+import unicodedata
 from dataclasses import dataclass
 from typing import Any
 
@@ -104,6 +105,10 @@ Additional multi-command requirement:
 - Example: "toi nong va troi toi qua" means two commands: turn_on fan and turn_on light.
 - If the user asks for fan and light together, include both commands in commands.
 - reply_message must summarize all commands in one short Vietnamese sentence.
+- If CURRENT_SYSTEM_CONTEXT is provided and the user asks about temperature, humidity, light level, fan, or LED state, use those current values in reply_message.
+- Use latest_sensor.temperature for temperature, latest_sensor.humidity for humidity, latest_sensor.light for light level.
+- Use outputs.fan.state/value and outputs.led.state/value for fan and LED state.
+- If the requested current value is missing, say you do not have that data yet. Do not invent values.
 '''
 
 
@@ -125,23 +130,27 @@ class LLMResponse:
     raw: dict[str, Any]
 
 
-def chat_with_llm(message: str) -> LLMResponse:
+def chat_with_llm(message: str, context: dict[str, Any] | None = None) -> LLMResponse:
     provider = os.environ.get('LLM_PROVIDER', 'groq').lower()
 
     if provider == 'groq':
-        return chat_with_groq(message)
+        return chat_with_groq(message, context=context)
 
     raise LLMConfigurationError(f'Unsupported LLM_PROVIDER: {provider}')
 
 
-def parse_iot_intent(user_text: str) -> dict[str, Any]:
-    response = chat_with_llm(user_text)
+def parse_iot_intent(user_text: str, context: dict[str, Any] | None = None) -> dict[str, Any]:
+    response = chat_with_llm(user_text, context=context)
     parsed = parse_json_object(response.text)
     commands = parse_intent_commands(parsed)
     reply_message = parsed.get('reply_message')
 
     if not isinstance(reply_message, str) or not reply_message.strip():
         raise LLMIntentParseError('reply_message must be a non-empty string.')
+
+    context_reply = build_context_reply(user_text, context)
+    if context_reply:
+        reply_message = context_reply
 
     intent = {
         'commands': commands,
@@ -226,7 +235,133 @@ def parse_output_value(value: Any) -> int | None:
     return round(parsed)
 
 
-def chat_with_groq(message: str) -> LLMResponse:
+def build_context_reply(user_text: str, context: dict[str, Any] | None = None) -> str | None:
+    if not context:
+        return None
+
+    normalized = normalize_vietnamese_text(user_text)
+    if not is_information_question(normalized):
+        return None
+
+    latest_sensor = context.get('latest_sensor')
+    outputs = context.get('outputs') if isinstance(context.get('outputs'), dict) else {}
+
+    if 'nhiet do' in normalized:
+        value = get_sensor_value(latest_sensor, 'temperature')
+        return format_measurement_reply('Nhiệt độ hiện tại', value, 'độ C')
+
+    if 'do am' in normalized or 'am do' in normalized:
+        value = get_sensor_value(latest_sensor, 'humidity')
+        return format_measurement_reply('Độ ẩm hiện tại', value, '%')
+
+    if 'anh sang' in normalized or 'cuong do sang' in normalized or 'do sang' in normalized:
+        value = get_sensor_value(latest_sensor, 'light')
+        return format_measurement_reply('Cường độ ánh sáng hiện tại', value, '')
+
+    if 'quat' in normalized:
+        return format_output_reply('Quạt', outputs.get('fan'))
+
+    if 'den' in normalized or 'led' in normalized:
+        return format_output_reply('Đèn', outputs.get('led'))
+
+    if 'thong so' in normalized or 'moi truong' in normalized or 'trang thai phong' in normalized:
+        return format_environment_reply(latest_sensor)
+
+    return None
+
+
+def normalize_vietnamese_text(text: str) -> str:
+    normalized = unicodedata.normalize('NFD', text.lower())
+    return ''.join(char for char in normalized if unicodedata.category(char) != 'Mn').replace('đ', 'd')
+
+
+def is_information_question(normalized_text: str) -> bool:
+    question_markers = [
+        'bao nhieu',
+        'may',
+        'hien tai',
+        'bay gio',
+        'dang',
+        'cho biet',
+        'kiem tra',
+        'xem',
+        'thong tin',
+        'thong so',
+        'trang thai',
+    ]
+    return any(marker in normalized_text for marker in question_markers)
+
+
+def get_sensor_value(latest_sensor: Any, key: str) -> Any:
+    if not isinstance(latest_sensor, dict):
+        return None
+    return latest_sensor.get(key)
+
+
+def format_measurement_reply(label: str, value: Any, unit: str) -> str:
+    if value is None:
+        return f'Tôi chưa có dữ liệu {label.lower()}.'
+
+    formatted_value = format_number(value)
+    if unit == '%':
+        return f'{label} là {formatted_value}%.'
+
+    if unit:
+        return f'{label} là {formatted_value} {unit}.'
+
+    return f'{label} là {formatted_value}.'
+
+
+def format_output_reply(label: str, output: Any) -> str:
+    if not isinstance(output, dict):
+        return f'Tôi chưa có dữ liệu trạng thái {label.lower()}.'
+
+    state = output.get('state')
+    value = output.get('value')
+    if state is None:
+        return f'Tôi chưa có dữ liệu trạng thái {label.lower()}.'
+
+    state_text = 'bật' if state else 'tắt'
+    if value is None:
+        return f'{label} hiện đang {state_text}.'
+
+    return f'{label} hiện đang {state_text}, mức {format_number(value)} phần trăm.'
+
+
+def format_environment_reply(latest_sensor: Any) -> str:
+    if not isinstance(latest_sensor, dict):
+        return 'Tôi chưa có dữ liệu môi trường hiện tại.'
+
+    temperature = latest_sensor.get('temperature')
+    humidity = latest_sensor.get('humidity')
+    light = latest_sensor.get('light')
+    parts = []
+    if temperature is not None:
+        parts.append(f'nhiệt độ {format_number(temperature)} độ C')
+    if humidity is not None:
+        parts.append(f'độ ẩm {format_number(humidity)}%')
+    if light is not None:
+        parts.append(f'ánh sáng {format_number(light)}')
+
+    if not parts:
+        return 'Tôi chưa có dữ liệu môi trường hiện tại.'
+
+    return 'Hiện tại ' + ', '.join(parts) + '.'
+
+
+def format_number(value: Any) -> str:
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return str(value)
+
+    if number.is_integer():
+        return str(round(number))
+
+    return f'{number:.1f}'.rstrip('0').rstrip('.')
+
+
+def chat_with_groq(message: str, context: dict[str, Any] | None = None) -> LLMResponse:
     api_key = os.environ.get('GROQ_API_KEY')
     if not api_key:
         raise LLMConfigurationError('GROQ_API_KEY is not configured.')
@@ -246,7 +381,7 @@ def chat_with_groq(message: str) -> LLMResponse:
                 },
                 {
                     'role': 'user',
-                    'content': message,
+                    'content': build_llm_user_content(message, context),
                 },
             ],
             response_format={'type': 'json_object'},
@@ -258,6 +393,57 @@ def chat_with_groq(message: str) -> LLMResponse:
 
     raw = completion.model_dump()
     return LLMResponse(text=extract_groq_text(raw), raw=raw)
+
+
+def build_llm_user_content(message: str, context: dict[str, Any] | None = None) -> str:
+    if not context:
+        return message
+
+    return (
+        f'CURRENT_SYSTEM_CONTEXT:\n{json.dumps(context, ensure_ascii=False)}\n\n'
+        f'USER_TRANSCRIPT:\n{message}'
+    )
+
+
+def get_current_iot_context() -> dict[str, Any]:
+    from control.models import OutputTarget
+    from gateway.protocol import get_esp32_state
+    from monitoring.models import SensorReading
+
+    state = get_esp32_state()
+    latest_sensor = state.latest_sensor
+    sensor_source = 'ram'
+
+    if latest_sensor is None:
+        latest_reading = SensorReading.objects.order_by('-created_at').first()
+        if latest_reading is not None:
+            latest_sensor = {
+                'timestamp': latest_reading.created_at.isoformat(),
+                'temperature': latest_reading.temperature,
+                'humidity': latest_reading.humidity,
+                'light': latest_reading.light,
+            }
+            sensor_source = 'database'
+
+    outputs = {}
+    for output in OutputTarget.objects.filter(key__in=['led', 'fan']):
+        current_state = output.current_state if isinstance(output.current_state, dict) else {}
+        outputs[output.key] = {
+            'name': output.name,
+            'kind': output.kind,
+            'is_enabled': output.is_enabled,
+            'state': current_state.get('state'),
+            'value': current_state.get('value'),
+            'updated_at': output.updated_at.isoformat(),
+        }
+
+    return {
+        'esp32_connected': state.connected,
+        'last_seen': state.last_seen,
+        'latest_sensor': latest_sensor,
+        'sensor_source': sensor_source if latest_sensor is not None else None,
+        'outputs': outputs,
+    }
 
 
 def extract_groq_text(raw: dict[str, Any]) -> str:

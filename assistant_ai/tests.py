@@ -3,10 +3,15 @@ from unittest.mock import patch
 
 from django.test import Client, TestCase
 
+from control.models import OutputTarget
+from gateway.protocol import get_esp32_state
+
 from .services import (
     LLMIntentParseError,
     LLMResponse,
+    build_llm_user_content,
     extract_groq_text,
+    get_current_iot_context,
     parse_intent_commands,
     parse_iot_intent,
     parse_json_object,
@@ -115,9 +120,92 @@ class LLMIntentApiTests(TestCase):
             },
         )
 
+    @patch('assistant_ai.services.chat_with_llm')
+    def test_parse_iot_intent_overrides_generic_sensor_reply_with_context_value(self, chat_with_llm):
+        chat_with_llm.return_value = LLMResponse(
+            text=(
+                '{"commands":[{"action":"get_status","device":"sensor","value":null}],'
+                '"reply_message":"Dang kiem tra do am."}'
+            ),
+            raw={},
+        )
+
+        intent = parse_iot_intent(
+            'độ ẩm hiện tại bao nhiêu',
+            context={
+                'latest_sensor': {
+                    'temperature': 31.0,
+                    'humidity': 65.0,
+                    'light': 420.0,
+                },
+                'outputs': {},
+            },
+        )
+
+        self.assertEqual(intent['reply_message'], 'Độ ẩm hiện tại là 65%.')
+
+    @patch('assistant_ai.services.chat_with_llm')
+    def test_parse_iot_intent_overrides_generic_output_reply_with_context_value(self, chat_with_llm):
+        chat_with_llm.return_value = LLMResponse(
+            text=(
+                '{"commands":[{"action":"get_status","device":"sensor","value":null}],'
+                '"reply_message":"Dang kiem tra den."}'
+            ),
+            raw={},
+        )
+
+        intent = parse_iot_intent(
+            'đèn đang bật không',
+            context={
+                'latest_sensor': {},
+                'outputs': {
+                    'led': {
+                        'state': True,
+                        'value': 80,
+                    }
+                },
+            },
+        )
+
+        self.assertEqual(intent['reply_message'], 'Đèn hiện đang bật, mức 80 phần trăm.')
+
     def test_parse_intent_commands_rejects_empty_commands(self):
         with self.assertRaises(LLMIntentParseError):
             parse_intent_commands({'commands': [], 'reply_message': 'Khong co lenh.'})
+
+    def test_build_llm_user_content_includes_current_context(self):
+        content = build_llm_user_content(
+            'nhiet do bao nhieu',
+            context={'latest_sensor': {'temperature': 30.5}, 'outputs': {'fan': {'value': 70}}},
+        )
+
+        self.assertIn('CURRENT_SYSTEM_CONTEXT', content)
+        self.assertIn('"temperature": 30.5', content)
+        self.assertIn('USER_TRANSCRIPT', content)
+
+    def test_get_current_iot_context_includes_sensor_and_outputs(self):
+        state = get_esp32_state()
+        state.connected = True
+        state.latest_sensor = {
+            'timestamp': 123,
+            'temperature': 31.0,
+            'humidity': 65.0,
+            'light': 420.0,
+        }
+        OutputTarget.objects.update_or_create(
+            key='fan',
+            defaults={
+                'name': 'Fan',
+                'kind': 'fan',
+                'current_state': {'target': 'fan', 'state': True, 'value': 80},
+                'is_enabled': True,
+            },
+        )
+
+        context = get_current_iot_context()
+
+        self.assertEqual(context['latest_sensor']['temperature'], 31.0)
+        self.assertEqual(context['outputs']['fan']['value'], 80)
 
     def test_extract_groq_text(self):
         text = extract_groq_text(
