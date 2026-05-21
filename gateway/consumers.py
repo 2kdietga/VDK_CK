@@ -10,6 +10,7 @@ from channels.db import database_sync_to_async
 from channels.generic.websocket import AsyncWebsocketConsumer
 from django.utils import timezone
 
+from automation.services import evaluate_automation_rules
 from control.models import CommandLog, OutputTarget
 from monitoring.models import SensorReading
 from assistant_ai.services import (
@@ -103,6 +104,7 @@ class ESP32Consumer(AsyncWebsocketConsumer):
             averaged_data = state.record_sensor_sample(data)
             if averaged_data is not None:
                 await self.save_sensor_reading(averaged_data)
+            await self.apply_automation_rules(data)
             return
 
         if message_type == MESSAGE_STATUS:
@@ -293,6 +295,15 @@ class ESP32Consumer(AsyncWebsocketConsumer):
     @database_sync_to_async
     def get_iot_context(self) -> dict[str, Any]:
         return get_current_iot_context()
+
+    async def apply_automation_rules(self, sensor_data: dict[str, Any]) -> None:
+        commands = await self.evaluate_automation_rules(sensor_data)
+        for command in commands:
+            await self.server_command(command)
+
+    @database_sync_to_async
+    def evaluate_automation_rules(self, sensor_data: dict[str, Any]) -> list[dict[str, Any]]:
+        return evaluate_automation_rules(sensor_data)
 
     @database_sync_to_async
     def build_latest_output_commands(self) -> list[dict[str, Any]]:

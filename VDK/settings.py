@@ -162,7 +162,9 @@ AUTH_PASSWORD_VALIDATORS = [
 
 LANGUAGE_CODE = 'en-us'
 
-TIME_ZONE = 'UTC'
+# Use UTC as the default timezone for consistency across deployments. The application should handle timezone conversions as needed.
+# if vietnam , use 'Asia/Ho_Chi_Minh'
+TIME_ZONE = 'Asia/Ho_Chi_Minh'
 
 USE_I18N = True
 

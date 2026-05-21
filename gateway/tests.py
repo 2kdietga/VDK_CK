@@ -6,6 +6,7 @@ from channels.testing import WebsocketCommunicator
 from django.test import Client, TransactionTestCase
 
 from VDK.asgi import application
+from automation.models import AutomationRule
 from control.models import CommandLog, OutputTarget
 from gateway.consumers import command_from_intent, commands_from_intent
 from gateway.protocol import get_esp32_state
@@ -128,6 +129,41 @@ class ESP32WebSocketTests(TransactionTestCase):
         self.assertEqual(messages[0]['params'], {'target': 'led', 'state': True, 'value': 70})
         self.assertEqual(messages[1]['params'], {'target': 'fan', 'state': True, 'value': 40})
         self.assertEqual(await get_system_command_count(), 2)
+
+        await communicator.disconnect()
+
+    async def test_sensor_payload_triggers_matching_automation_rule(self):
+        await create_output_target('fan', 'Fan', 'fan', {'target': 'fan', 'state': False, 'value': 0})
+        await create_automation_rule(
+            name='Hot room turns fan on',
+            conditions=[{'field': 'temperature', 'operator': '>', 'value': 30}],
+            action={
+                'name': 'set_output',
+                'params': {'target': 'fan', 'state': True, 'value': 75},
+            },
+        )
+
+        communicator = WebsocketCommunicator(application, '/ws/esp32/')
+        connected, _ = await communicator.connect()
+        self.assertTrue(connected)
+        await receive_initial_sync_commands(communicator, count=1)
+
+        await communicator.send_json_to(
+            {
+                'type': 'sensor_data',
+                'data': {
+                    'temperature': 31,
+                    'humidity': 70,
+                    'light': 400,
+                },
+            }
+        )
+        command_message = json.loads(await communicator.receive_from())
+
+        self.assertEqual(command_message['type'], 'command')
+        self.assertEqual(command_message['name'], 'set_output')
+        self.assertEqual(command_message['params'], {'target': 'fan', 'state': True, 'value': 75})
+        self.assertEqual(await get_rule_command_count(), 1)
 
         await communicator.disconnect()
 
@@ -352,6 +388,21 @@ def create_output_target(key, name, kind, current_state=None):
 @database_sync_to_async
 def get_system_command_count():
     return CommandLog.objects.filter(source=CommandLog.Source.SYSTEM).count()
+
+
+@database_sync_to_async
+def get_rule_command_count():
+    return CommandLog.objects.filter(source=CommandLog.Source.RULE).count()
+
+
+@database_sync_to_async
+def create_automation_rule(name, conditions, action):
+    AutomationRule.objects.create(
+        name=name,
+        conditions=conditions,
+        action=action,
+        is_enabled=True,
+    )
 
 
 async def receive_initial_sync_commands(communicator, count=2):
