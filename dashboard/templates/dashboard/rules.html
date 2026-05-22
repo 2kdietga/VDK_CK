@@ -6,42 +6,56 @@
 <div class="page-title">
   <div>
     <h1>Rules</h1>
-    <div class="muted">Automation rules prepared for the rule engine.</div>
+    <div class="muted">Create and edit sensor-based automation without JSON.</div>
   </div>
 </div>
 
-<div class="panel">
-  {% if rules %}
-    <table>
-      <thead>
-        <tr>
-          <th>Name</th>
-          <th>Enabled</th>
-          <th>Conditions</th>
-          <th>Action</th>
-          <th>Updated</th>
-        </tr>
-      </thead>
-      <tbody>
-        {% for rule in rules %}
-          <tr>
-            <td>{{ rule.name }}</td>
-            <td>
-              {% if rule.is_enabled %}
-                <span class="status ok">enabled</span>
-              {% else %}
-                <span class="status bad">disabled</span>
-              {% endif %}
-            </td>
-            <td><pre>{{ rule.conditions }}</pre></td>
-            <td><pre>{{ rule.action }}</pre></td>
-            <td>{{ rule.updated_at }}</td>
-          </tr>
+<div class="grid two rule-layout">
+  <section class="panel">
+    <h2>New Rule</h2>
+    <form class="rule-form" method="post">
+      {% csrf_token %}
+      <input type="hidden" name="form_action" value="save">
+      {% include "dashboard/partials/rule_form_fields.html" with form_id="new" submit_label="Create Rule" %}
+    </form>
+  </section>
+
+  <section class="panel">
+    <h2>Active Rules</h2>
+    {% if rule_rows %}
+      <div class="rule-list">
+        {% for row in rule_rows %}
+          {% with rule=row.rule form=row.form form_id=rule.id submit_label="Save Changes" %}
+            <details class="rule-item" {% if forloop.first %}open{% endif %}>
+              <summary>
+                <span>
+                  <strong>{{ rule.name }}</strong>
+                  <span class="rule-summary">{{ row.condition_label }} -> {{ row.action_label }}</span>
+                </span>
+                {% if rule.is_enabled %}
+                  <span class="status ok">enabled</span>
+                {% else %}
+                  <span class="status bad">disabled</span>
+                {% endif %}
+              </summary>
+
+              <form class="rule-form" method="post">
+                {% csrf_token %}
+                <input type="hidden" name="form_action" value="save">
+                <input type="hidden" name="rule_id" value="{{ rule.id }}">
+                {% include "dashboard/partials/rule_form_fields.html" with submit_label="" %}
+                <div class="rule-actions">
+                  <button type="submit">Save Changes</button>
+                  <button class="danger" type="submit" name="form_action" value="delete">Delete</button>
+                </div>
+              </form>
+            </details>
+          {% endwith %}
         {% endfor %}
-      </tbody>
-    </table>
-  {% else %}
-    <div class="empty">No automation rules yet.</div>
-  {% endif %}
+      </div>
+    {% else %}
+      <div class="empty">No automation rules yet.</div>
+    {% endif %}
+  </section>
 </div>
 {% endblock %}

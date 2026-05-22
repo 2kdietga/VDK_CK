@@ -25,6 +25,7 @@ class ESP32WebSocketTests(TransactionTestCase):
         state.sensor_accumulator = None
         OutputTarget.objects.all().delete()
         CommandLog.objects.all().delete()
+        AutomationRule.objects.all().delete()
 
     async def test_sensor_payload_updates_ram_without_immediate_database_write(self):
         communicator = WebsocketCommunicator(application, '/ws/esp32/')
@@ -85,6 +86,7 @@ class ESP32WebSocketTests(TransactionTestCase):
         )
         self.assertTrue(await communicator.receive_nothing(timeout=0.05))
 
+        await wait_for_sensor_reading_count()
         reading = await get_latest_sensor_reading()
         self.assertEqual(reading['temperature'], 30.0)
         self.assertEqual(reading['humidity'], 70.0)
@@ -227,6 +229,7 @@ class ESP32CommandApiTests(TransactionTestCase):
         state.sensor_accumulator = None
         OutputTarget.objects.all().delete()
         CommandLog.objects.all().delete()
+        AutomationRule.objects.all().delete()
 
     def test_send_command_creates_command_log_without_updating_output_before_ack(self):
         OutputTarget.objects.update_or_create(
@@ -422,6 +425,15 @@ async def wait_for(predicate, timeout=1.0):
             return
         await asyncio.sleep(0.01)
     assert predicate()
+
+
+async def wait_for_sensor_reading_count(timeout=1.0):
+    deadline = asyncio.get_running_loop().time() + timeout
+    while asyncio.get_running_loop().time() < deadline:
+        if await get_sensor_reading_count() > 0:
+            return
+        await asyncio.sleep(0.01)
+    assert await get_sensor_reading_count() > 0
 
 
 @database_sync_to_async

@@ -169,6 +169,7 @@ venv/
 venv310/
 venv311/
 .env/
+runserver.*.log
 
 
 # PyCharm

@@ -1,0 +1,91 @@
+<div class="rule-fields">
+  <label class="form-field wide">
+    <span>Name</span>
+    <input name="name" type="text" value="{{ rule.name }}" placeholder="Hot room turns fan on" required>
+  </label>
+
+  <label class="form-field wide">
+    <span>Description</span>
+    <input name="description" type="text" value="{{ rule.description }}" placeholder="Optional note for this rule">
+  </label>
+
+  <label class="checkbox-field">
+    <input name="is_enabled" type="checkbox" {% if rule.is_enabled or not rule %}checked{% endif %}>
+    <span>Enabled</span>
+  </label>
+</div>
+
+<div class="rule-section">
+  <h3>When Sensor</h3>
+  <div class="rule-fields three">
+    {% with selected_field=form.field|default:"temperature" %}
+      <label class="form-field">
+        <span>Reading</span>
+        <select name="field">
+          {% for value,label in field_options %}
+            <option value="{{ value }}" {% if value == selected_field %}selected{% endif %}>{{ label }}</option>
+          {% endfor %}
+        </select>
+      </label>
+    {% endwith %}
+
+    {% with selected_operator=form.operator|default:">" %}
+      <label class="form-field">
+        <span>Condition</span>
+        <select name="operator">
+          {% for value,label in operator_options %}
+            <option value="{{ value }}" {% if value == selected_operator %}selected{% endif %}>{{ label }}</option>
+          {% endfor %}
+        </select>
+      </label>
+    {% endwith %}
+
+    <label class="form-field">
+      <span>Value</span>
+      <input name="threshold" type="number" step="0.1" value="{{ form.threshold|default:30 }}" required>
+    </label>
+  </div>
+</div>
+
+<div class="rule-section">
+  <h3>Then Output</h3>
+  <div class="rule-fields four">
+    {% with selected_target=form.target|default:"fan" %}
+      <label class="form-field">
+        <span>Device</span>
+        <select name="target">
+          {% for value,label in target_options %}
+            <option value="{{ value }}" {% if value == selected_target %}selected{% endif %}>{{ label }}</option>
+          {% endfor %}
+        </select>
+      </label>
+    {% endwith %}
+
+    {% with selected_state=form.state|default:"on" %}
+      <label class="form-field">
+        <span>Action</span>
+        <select name="state">
+          {% for value,label in state_options %}
+            <option value="{{ value }}" {% if value == selected_state %}selected{% endif %}>{{ label }}</option>
+          {% endfor %}
+        </select>
+      </label>
+    {% endwith %}
+
+    <label class="form-field">
+      <span>Level</span>
+      <input name="value" type="number" min="0" max="100" step="1" value="{{ form.value|default:100 }}" required>
+    </label>
+
+    <label class="form-field">
+      <span>Cooldown</span>
+      <input name="cooldown_seconds" type="number" min="0" step="1" value="{{ form.cooldown_seconds|default:60 }}" required>
+    </label>
+  </div>
+</div>
+
+{% if submit_label %}
+  <div class="rule-actions">
+    <button type="submit">{{ submit_label }}</button>
+  </div>
+{% endif %}
