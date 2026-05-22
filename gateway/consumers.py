@@ -199,7 +199,7 @@ class ESP32Consumer(AsyncWebsocketConsumer):
         try:
             pcm = await loop.run_in_executor(None, voicerss_tts_pcm, message)
         except AudioProcessingError as exc:
-            print(f'[TEMPERATURE ALERT TTS FAILED] {exc}', flush=True)
+            print(f'[ALERT TTS FAILED] {exc}', flush=True)
             pcm = fallback_tone_pcm()
 
         await self.send_audio_pcm(pcm)
@@ -324,6 +324,15 @@ class ESP32Consumer(AsyncWebsocketConsumer):
         commands = await self.evaluate_automation_rules(sensor_data)
         for command in commands:
             await self.server_command(command)
+            alert_message = command.get('automation_alert_message')
+            if isinstance(alert_message, str) and alert_message.strip():
+                print(
+                    '[AUTOMATION ALERT] '
+                    f"rule={command.get('automation_rule')} "
+                    f"message={alert_message}",
+                    flush=True,
+                )
+                await self.send_alert_audio(alert_message)
 
     @database_sync_to_async
     def evaluate_automation_rules(self, sensor_data: dict[str, Any]) -> list[dict[str, Any]]:

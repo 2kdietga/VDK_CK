@@ -178,6 +178,11 @@ class AutomationRuleEngineTests(TestCase):
         self.assertEqual(len(commands), 1)
         self.assertEqual(commands[0]['name'], 'set_output')
         self.assertEqual(commands[0]['params'], {'target': 'fan', 'state': True, 'value': 80})
+        self.assertEqual(commands[0]['automation_rule']['name'], 'Hot room turns fan on')
+        self.assertEqual(
+            commands[0]['automation_alert_message'],
+            'Rule tu dong Hot room turns fan on da kich hoat, da bat quat muc 80 phan tram.',
+        )
 
         command_log = CommandLog.objects.get(command_id=commands[0]['command_id'])
         self.assertEqual(command_log.source, CommandLog.Source.RULE)

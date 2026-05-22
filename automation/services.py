@@ -398,6 +398,11 @@ def build_rule_command(rule: AutomationRule) -> dict[str, Any] | None:
         'command_id': uuid.uuid4().hex,
         'name': name,
         'params': params,
+        'automation_rule': {
+            'id': rule.id,
+            'name': rule.name,
+        },
+        'automation_alert_message': build_rule_alert_message(rule, params),
     }
     CommandLog.objects.create(
         command_id=command['command_id'],
@@ -409,6 +414,18 @@ def build_rule_command(rule: AutomationRule) -> dict[str, Any] | None:
         sent_at=timezone.now(),
     )
     return command
+
+
+def build_rule_alert_message(rule: AutomationRule, params: dict[str, Any]) -> str:
+    target_text = 'quat' if params['target'] == 'fan' else 'den'
+    state_text = 'bat' if params['state'] else 'tat'
+
+    if params['state']:
+        action_text = f'đã {state_text} {target_text} mức {params["value"]} phần trăm'
+    else:
+        action_text = f'đã {state_text} {target_text}'
+
+    return f'Chế độ tự động {rule.name} đã kích hoạt, {action_text}.'
 
 
 def normalize_set_output_params(params: dict[str, Any]) -> dict[str, Any] | None:
