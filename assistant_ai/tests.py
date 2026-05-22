@@ -149,6 +149,24 @@ class LLMIntentApiTests(TestCase):
         )
 
     @patch('assistant_ai.services.chat_with_llm')
+    def test_parse_iot_intent_accepts_reply_only_response(self, chat_with_llm):
+        chat_with_llm.return_value = LLMResponse(
+            text='{"commands":[],"automation_rules":[],"reply_message":"Khong co gi a."}',
+            raw={},
+        )
+
+        intent = parse_iot_intent('cam on')
+
+        self.assertEqual(
+            intent,
+            {
+                'automation_rules': [],
+                'commands': [],
+                'reply_message': 'Khong co gi a.',
+            },
+        )
+
+    @patch('assistant_ai.services.chat_with_llm')
     def test_parse_iot_intent_accepts_automation_rule_request(self, chat_with_llm):
         chat_with_llm.return_value = LLMResponse(
             text=(

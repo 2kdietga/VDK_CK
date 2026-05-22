@@ -94,6 +94,9 @@ class ESP32State:
     audio_chunks_received: int = 0
     audio_requests_processed: int = 0
     sensor_accumulator: SensorAccumulator | None = None
+    alert_active_key: str | None = None
+    alert_level: str | None = None
+    last_alert_at: float | None = None
 
     def touch(self) -> None:
         self.last_seen = time.time()
@@ -129,6 +132,11 @@ class ESP32State:
             'last_status': self.last_status,
             'audio_chunks_received': self.audio_chunks_received,
             'audio_requests_processed': self.audio_requests_processed,
+            'alert': {
+                'active_key': self.alert_active_key,
+                'level': self.alert_level,
+                'last_alert_at': self.last_alert_at,
+            },
             'sensor_average': (
                 self.sensor_accumulator.as_dict()
                 if self.sensor_accumulator is not None

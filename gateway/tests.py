@@ -23,6 +23,9 @@ class ESP32WebSocketTests(TransactionTestCase):
         state.last_status = None
         state.audio_chunks_received = 0
         state.sensor_accumulator = None
+        state.alert_active_key = None
+        state.alert_level = None
+        state.last_alert_at = None
         OutputTarget.objects.all().delete()
         CommandLog.objects.all().delete()
         AutomationRule.objects.all().delete()
@@ -232,6 +235,17 @@ class VoiceIntentCommandTests(TransactionTestCase):
 
         self.assertEqual(commands, [])
 
+    def test_reply_only_intent_does_not_build_output_commands(self):
+        commands = commands_from_intent(
+            {
+                'commands': [],
+                'automation_rules': [],
+                'reply_message': 'Khong co gi a.',
+            }
+        )
+
+        self.assertEqual(commands, [])
+
 
 class ESP32CommandApiTests(TransactionTestCase):
     def setUp(self):
@@ -243,6 +257,9 @@ class ESP32CommandApiTests(TransactionTestCase):
         state.last_status = None
         state.audio_chunks_received = 0
         state.sensor_accumulator = None
+        state.alert_active_key = None
+        state.alert_level = None
+        state.last_alert_at = None
         OutputTarget.objects.all().delete()
         CommandLog.objects.all().delete()
         AutomationRule.objects.all().delete()

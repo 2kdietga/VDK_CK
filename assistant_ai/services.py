@@ -17,257 +17,93 @@ ALLOWED_DEVICES = {'light', 'fan', 'sensor'}
 ALLOWED_AUTOMATION_OPERATIONS = {'create', 'update', 'upsert', 'enable', 'disable', 'delete'}
 ALLOWED_AUTOMATION_FIELDS = {'temperature', 'humidity', 'light'}
 ALLOWED_AUTOMATION_TARGETS = {'led', 'fan', 'light'}
-IOT_INTENT_SYSTEM_PROMPT = '''Bạn là trợ lý AIoT dùng cho hệ thống giám sát môi trường ESP32.
-Nhiệm vụ của bạn là phân tích câu nói tiếng Việt của người dùng, sau đó trả về đúng một object JSON duy nhất.
-Không được thêm markdown, giải thích, chú thích hay bất kỳ nội dung nào ngoài JSON.
+IOT_INTENT_SYSTEM_PROMPT = '''
+Bạn là trợ lý AIoT cho hệ thống giám sát môi trường ESP32.
+Nhiệm vụ: phân tích câu nói tiếng Việt của người dùng và chỉ trả về đúng 1 JSON object, không markdown, không giải thích.
 
-Required JSON shape:
-{
-  "action": "turn_on" | "turn_off" | "get_status",
-  "device": "light" | "fan" | "sensor",
-  "value": 0-100 | null,
-  "reply_message": "short Vietnamese reply for text-to-speech"
-}
-
-Quy tắc xử lý:
-
-1. Điều khiển quạt:
-- Nếu người dùng nói nóng, oi, bí, ngột ngạt, khó chịu, cần mát hơn → bật quạt.
-- Nếu người dùng nói lạnh, mát rồi, thoáng rồi, không cần quạt, tắt gió → tắt quạt.
-- Nóng thì bật quạt, lạnh thì tắt quạt.
-
-2. Điều khiển đèn:
-- Nếu người dùng nói tối, hơi tối, thiếu sáng, bật đèn, sáng hơn → bật đèn.
-- Nếu người dùng nói tắt đèn, không cần đèn, sáng quá → tắt đèn.
-
-3. Hỏi trạng thái cảm biến:
-- Nếu người dùng hỏi về nhiệt độ, độ ẩm, ánh sáng, môi trường, trạng thái phòng, thông số cảm biến → lấy trạng thái cảm biến.
-- Khi lấy trạng thái cảm biến:
-  - "action": "get_status"
-  - "device": "sensor"
-  - "value": null
-
-4. Xử lý phần trăm hoặc mức:
-- Nếu người dùng nói phần trăm hoặc mức từ 0 đến 100, đưa giá trị đó vào "value".
-- Ví dụ:
-  - "bật đèn 50%"
-  - "bật đèn độ sáng 50"
-  - "đèn năm mươi phần trăm"
-  → {"action":"turn_on","device":"light","value":50}
-
-- Ví dụ:
-  - "bật quạt 70%"
-  - "cho quạt 70"
-  - "quạt bảy mươi phần trăm"
-  → {"action":"turn_on","device":"fan","value":70}
-
-5. Nếu không có phần trăm hoặc mức:
-- Với lệnh bật thiết bị, dùng "value": null.
-- Với lệnh hỏi trạng thái, dùng "value": null.
-- Với lệnh tắt thiết bị, dùng "value": 0, trừ khi người dùng nói rõ một giá trị hợp lệ khác.
-
-6. Giá trị hợp lệ:
-- "action" chỉ được là một trong các giá trị:
-  - "turn_on"
-  - "turn_off"
-  - "get_status"
-
-- "device" chỉ được là một trong các giá trị:
-  - "light"
-  - "fan"
-  - "sensor"
-
-7. Phản hồi:
-- "reply_message" phải là câu tiếng Việt ngắn gọn, tự nhiên, phù hợp để chuyển thành giọng nói.
-- Ví dụ:
-  - "Đã bật quạt."
-  - "Đã tắt đèn."
-  - "Đang kiểm tra môi trường."
-  - "Đã bật đèn mức 50 phần trăm."
-
-Chỉ trả về đúng một JSON object duy nhất.'''
-
-_last_llm_request_at = 0.0
-_llm_rate_limit_lock = threading.Lock()
-
-IOT_INTENT_SYSTEM_PROMPT += '''
-
-Additional multi-command requirement:
-- Prefer this JSON shape for all responses:
-  {
-    "commands": [
-      {
-        "action": "turn_on" | "turn_off" | "get_status",
-        "device": "light" | "fan" | "sensor",
-        "value": 0-100 | null
-      }
-    ],
-    "reply_message": "short Vietnamese reply for text-to-speech"
-  }
-- Return one command for each distinct user request in the same sentence.
-- Example: "toi nong va troi toi qua" means two commands: turn_on fan and turn_on light.
-- If the user asks for fan and light together, include both commands in commands.
-- reply_message must summarize all commands in one short Vietnamese sentence.
-- If CURRENT_SYSTEM_CONTEXT is provided and the user asks about temperature, humidity, light level, fan, or LED state, use those current values in reply_message.
-- Use latest_sensor.temperature for temperature, latest_sensor.humidity for humidity, latest_sensor.light for light level.
-- Use outputs.fan.state/value and outputs.led.state/value for fan and LED state.
-- If the requested current value is missing, say you do not have that data yet. Do not invent values.
-- If the user asks to create, change, enable, disable, or delete an automation rule, include automation_rules.
-- For range rules such as "tren 30 va duoi 50", put both limits in automation_rules[].conditions. Conditions are AND.
-- Automation JSON shape:
-  {
-    "automation_rules": [
-      {
-        "operation": "create" | "update" | "upsert" | "enable" | "disable" | "delete",
-        "name": "short rule name or null",
-        "condition": {"field": "temperature" | "humidity" | "light", "operator": ">" | ">=" | "<" | "<=" | "==" | "!=", "value": number},
-        "conditions": [{"field": "temperature" | "humidity" | "light", "operator": ">" | ">=" | "<" | "<=" | "==" | "!=", "value": number}],
-        "action": {"target": "fan" | "led" | "light", "state": true | false, "value": 0-100 | null, "cooldown_seconds": integer | null}
-      }
-    ]
-  }
-- Example: "khi nhiet do tren 30 thi bat quat 80 phan tram" means create one automation rule with temperature > 30 and fan on value 80.
-- Example: "khi nhiet do tren 30 va duoi 50 thi bat quat" means create one automation rule with conditions temperature > 30 AND temperature < 50.
-- Example: "khi troi toi duoi 300 thi bat den" means create one automation rule with light < 300 and led on.
-- For automation-only requests, commands may be an empty list.
-
-QUY TẮC RẤT QUAN TRỌNG VỀ ACTION CẤP NGOÀI:
-
-Trường "action" ở cấp JSON ngoài cùng chỉ được nhận một trong ba giá trị:
-- "turn_on"
-- "turn_off"
-- "get_status"
-
-Tuyệt đối không được đặt:
-- "action": "create"
-- "action": "update"
-- "action": "delete"
-- "action": "enable"
-- "action": "disable"
-- "action": "upsert"
-
-Các giá trị create, update, upsert, enable, disable, delete chỉ được dùng trong:
-automation_rules[].operation
-
-Nếu người dùng yêu cầu tạo, sửa, bật, tắt hoặc xóa luật tự động hóa, thì JSON cấp ngoài phải dùng:
-{
-  "action": "get_status",
-  "device": "sensor",
-  "value": null
-}
-
-Sau đó mới thêm automation_rules.
-
-Ví dụ đúng:
-{
-  "action": "get_status",
-  "device": "sensor",
-  "value": null,
-  "reply_message": "Đã tạo luật tự động bật quạt khi nhiệt độ trên 30 độ.",
-  "automation_rules": [
-    {
-      "operation": "create",
-      "name": "bat_quat_khi_nong",
-      "condition": {
-        "field": "temperature",
-        "operator": ">",
-        "value": 30
-      },
-      "action": {
-        "target": "fan",
-        "state": true,
-        "value": 80,
-        "cooldown_seconds": null
-      }
-    }
-  ]
-}
-
-Ví dụ sai, tuyệt đối không được trả:
-{
-  "action": "create",
-  "device": "fan",
-  "value": 80
-'''
-
-IOT_INTENT_SYSTEM_PROMPT += '''
-
-FINAL OUTPUT CONTRACT - HIGHEST PRIORITY:
-
-Always return exactly this top-level shape:
+Luôn trả về đúng cấu trúc:
 {
   "commands": [],
   "automation_rules": [],
-  "reply_message": "short Vietnamese reply"
+  "reply_message": "câu phản hồi tiếng Việt ngắn gọn"
 }
 
-Use commands only for immediate device control.
-Each item in commands may use:
+1. commands dùng cho lệnh điều khiển ngay:
 {
   "action": "turn_on" | "turn_off" | "get_status",
   "device": "light" | "fan" | "sensor",
   "value": 0-100 | null
 }
 
-Use automation_rules only for automation/rule requests.
-Each item in automation_rules must use:
+Quy tắc commands:
+- Nóng, oi, bí, cần mát hơn → bật fan.
+- Lạnh, mát rồi, không cần quạt → tắt fan.
+- Tối, thiếu sáng, bật đèn, sáng hơn → bật light.
+- Sáng quá, tắt đèn, không cần đèn → tắt light.
+- Hỏi nhiệt độ, độ ẩm, ánh sáng, môi trường, trạng thái phòng → get_status sensor.
+- Nếu có phần trăm/mức 0-100 thì đưa vào value.
+- Nếu bật mà không nói mức → value null.
+- Nếu tắt → value 0.
+- Nếu có nhiều yêu cầu trong một câu, tạo nhiều command.
+
+2. automation_rules dùng cho yêu cầu tạo/sửa/bật/tắt/xóa luật tự động:
 {
   "operation": "create" | "update" | "upsert" | "enable" | "disable" | "delete",
-  "name": "short rule name or null",
+  "name": "tên rule ngắn hoặc null",
   "condition": {"field": "temperature" | "humidity" | "light", "operator": ">" | ">=" | "<" | "<=" | "==" | "!=", "value": number},
-  "conditions": [{"field": "temperature" | "humidity" | "light", "operator": ">" | ">=" | "<" | "<=" | "==" | "!=", "value": number}],
+  "conditions": [
+    {"field": "temperature" | "humidity" | "light", "operator": ">" | ">=" | "<" | "<=" | "==" | "!=", "value": number}
+  ],
   "action": {"target": "fan" | "led" | "light", "state": true | false, "value": 0-100 | null, "cooldown_seconds": integer | null}
 }
 
-Never use create/update/upsert/enable/disable/delete as a top-level action.
-Top-level "action" is obsolete. Prefer commands[] and automation_rules[].
+Quy tắc automation_rules:
+- Yêu cầu kiểu "khi... thì..." là tạo rule tự động.
+- Ví dụ: "khi nhiệt độ trên 30 thì bật quạt 80%" → create rule temperature > 30, fan on value 80.
+- Nếu có khoảng điều kiện như "trên 30 và dưới 50", dùng conditions với nhiều điều kiện AND.
+- Nếu chỉ tạo rule tự động, commands phải là [].
 
-Correct automation example:
-User: "khi nhiet do tren 30 thi bat quat 80 phan tram"
+3. Dùng CURRENT_SYSTEM_CONTEXT nếu có:
+- latest_sensor.temperature: nhiệt độ
+- latest_sensor.humidity: độ ẩm
+- latest_sensor.light: ánh sáng
+- outputs.fan.state/value: trạng thái quạt
+- outputs.led.state/value: trạng thái đèn
+Nếu thiếu dữ liệu thì nói chưa có dữ liệu, không tự bịa.
+
+4. reply_message:
+- Viết tiếng Việt ngắn gọn, tự nhiên, phù hợp để đọc bằng giọng nói.
+- Tóm tắt đúng các lệnh hoặc rule đã xử lý.
+
+5. Câu giao tiếp thông thường:
+- Nếu người dùng chỉ chào hỏi, cảm ơn, tạm biệt, hỏi xã giao hoặc nói chuyện không liên quan đến điều khiển thiết bị/cảm biến/rule tự động, thì không tạo command và không tạo automation rule.
+- Trả lời lịch sự, ngắn gọn trong reply_message.
+
+Ví dụ:
+User: "xin chào"
 Return:
 {
   "commands": [],
-  "automation_rules": [
-    {
-      "operation": "create",
-      "name": "Bat quat khi nhiet do tren 30",
-      "condition": {"field": "temperature", "operator": ">", "value": 30},
-      "action": {"target": "fan", "state": true, "value": 80, "cooldown_seconds": 60}
-    }
-  ],
-  "reply_message": "Đã tạo rule bật quạt 80 phần trăm khi nhiệt độ trên 30 độ."
-}
-
-Correct range automation example:
-User: "khi nhiet do tren 30 va duoi 50 thi bat quat"
-Return:
-{
-  "commands": [],
-  "automation_rules": [
-    {
-      "operation": "create",
-      "name": "Bat quat khi nhiet do tu 30 den 50",
-      "conditions": [
-        {"field": "temperature", "operator": ">", "value": 30},
-        {"field": "temperature", "operator": "<", "value": 50}
-      ],
-      "action": {"target": "fan", "state": true, "value": 100, "cooldown_seconds": 60}
-    }
-  ],
-  "reply_message": "Đã tạo rule bật quạt khi nhiệt độ trên 30 và dưới 50 độ."
-}
-
-Correct immediate-control example:
-User: "bat quat 80 phan tram"
-Return:
-{
-  "commands": [
-    {"action": "turn_on", "device": "fan", "value": 80}
-  ],
   "automation_rules": [],
-  "reply_message": "Đã bật quạt 80 phần trăm."
+  "reply_message": "Xin chào, tôi có thể giúp gì cho bạn?"
 }
+
+User: "cảm ơn"
+Return:
+{
+  "commands": [],
+  "automation_rules": [],
+  "reply_message": "Không có gì ạ."
+}
+
+Lưu ý quan trọng:
+- Không bao giờ dùng create/update/delete/enable/disable/upsert làm action trong commands.
+- Các giá trị đó chỉ được dùng trong automation_rules[].operation.
+- Chỉ trả về đúng JSON object duy nhất.
 '''
+
+_last_llm_request_at = 0.0
+_llm_rate_limit_lock = threading.Lock()
 
 
 class LLMConfigurationError(RuntimeError):
@@ -301,7 +137,10 @@ def parse_iot_intent(user_text: str, context: dict[str, Any] | None = None) -> d
     response = chat_with_llm(user_text, context=context)
     parsed = normalize_llm_schema(parse_json_object(response.text))
     automation_rules = parse_automation_rule_requests(parsed.get('automation_rules'))
-    commands = parse_intent_commands(parsed, allow_empty=bool(automation_rules))
+    commands = parse_intent_commands(
+        parsed,
+        allow_empty=bool(automation_rules) or parsed.get('commands') == [],
+    )
     if automation_rules and is_automation_request(user_text):
         commands = []
     reply_message = parsed.get('reply_message')

@@ -12,6 +12,7 @@ from django.utils import timezone
 
 from automation.services import apply_automation_rule_requests, evaluate_automation_rules
 from control.models import CommandLog, OutputTarget
+from monitoring.alerts import evaluate_temperature_alert
 from monitoring.models import SensorReading
 from assistant_ai.services import (
     LLMConfigurationError,
@@ -105,6 +106,7 @@ class ESP32Consumer(AsyncWebsocketConsumer):
             if averaged_data is not None:
                 await self.save_sensor_reading(averaged_data)
             await self.apply_automation_rules(data)
+            await self.apply_temperature_alert(data)
             return
 
         if message_type == MESSAGE_STATUS:
@@ -151,7 +153,7 @@ class ESP32Consumer(AsyncWebsocketConsumer):
             state.audio_requests_processed += 1
         except (AudioProcessingError, LLMConfigurationError, LLMProviderError, LLMIntentParseError) as exc:
             await self.send_error('voice_processing_failed', str(exc))
-            reply_message = 'Toi chua xu ly duoc yeu cau bang giong noi.'
+            reply_message = 'Bạn có thể nói lại được không.'
 
         await self.send_json({'type': 'stop_listen'})
 
@@ -189,6 +191,20 @@ class ESP32Consumer(AsyncWebsocketConsumer):
             await self.send(bytes_data=chunk)
             sent += len(chunk)
             await asyncio.sleep(0.025)
+
+    async def send_alert_audio(self, message: str) -> None:
+        loop = asyncio.get_running_loop()
+        await self.send_json({'type': 'stop_listen'})
+
+        try:
+            pcm = await loop.run_in_executor(None, voicerss_tts_pcm, message)
+        except AudioProcessingError as exc:
+            print(f'[TEMPERATURE ALERT TTS FAILED] {exc}', flush=True)
+            pcm = fallback_tone_pcm()
+
+        await self.send_audio_pcm(pcm)
+        await asyncio.sleep(0.2)
+        await self.send_json({'type': 'audio_done'})
 
     async def handle_command_ack(self, payload: dict[str, Any]) -> None:
         command_id = payload.get('command_id')
@@ -312,6 +328,33 @@ class ESP32Consumer(AsyncWebsocketConsumer):
     @database_sync_to_async
     def evaluate_automation_rules(self, sensor_data: dict[str, Any]) -> list[dict[str, Any]]:
         return evaluate_automation_rules(sensor_data)
+
+    async def apply_temperature_alert(self, sensor_data: dict[str, Any]) -> None:
+        decision = await self.evaluate_temperature_alert(sensor_data)
+        if not decision.get('should_alert'):
+            return
+
+        print(
+            '[TEMPERATURE ALERT] '
+            f"level={decision.get('level')} "
+            f"risk={decision.get('risk_score')} "
+            f"reasons={decision.get('reasons')} "
+            f"message={decision.get('message')}",
+            flush=True,
+        )
+        await self.send_alert_audio(decision['message'])
+
+    @database_sync_to_async
+    def evaluate_temperature_alert(self, sensor_data: dict[str, Any]) -> dict[str, Any]:
+        decision = evaluate_temperature_alert(sensor_data)
+        return {
+            'should_alert': decision.should_alert,
+            'key': decision.key,
+            'level': decision.level,
+            'message': decision.message,
+            'risk_score': decision.risk_score,
+            'reasons': decision.reasons,
+        }
 
     @database_sync_to_async
     def build_latest_output_commands(self) -> list[dict[str, Any]]:

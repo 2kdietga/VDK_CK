@@ -10,6 +10,7 @@ Backend Django cho he thong AIoT dung ESP32 de giam sat moi truong va dieu khien
 - Gui command `set_output` dieu khien `led` va `fan`.
 - Dong bo trang thai LED/fan moi nhat cho ESP32 moi ket noi.
 - ACK command tu ESP32 de cap nhat `CommandLog` va `OutputTarget.current_state`.
+- Canh bao nhiet do thong minh dua tren nguong hien tai va lich su nhiet do gan day.
 - Dashboard server-rendered:
   - Overview
   - Sensors
@@ -173,6 +174,33 @@ Server se:
 - Luu `SensorReading` theo cua so trung binh 180 giay.
 - Evaluate automation rules.
 - Neu rule match, gui command ve ESP32 va log `CommandLog.source=rule`.
+- Evaluate canh bao nhiet do tu du lieu hien tai + lich su database.
+- Neu canh bao match, gui `stop_listen`, audio canh bao PCM ve ESP32, roi gui `audio_done`.
+
+### Temperature alert audio
+
+Khi nhiet do co rui ro cao, server gui audio canh bao ve ESP32 theo cung co che audio cua voice:
+
+```text
+ESP32 -> sensor_data
+Server -> stop_listen
+Server -> binary PCM audio warning
+Server -> audio_done
+```
+
+Thong diep canh bao duoc tao bang VoiceRSS TTS. Neu VoiceRSS loi hoac thieu API key, server gui fallback tone de ESP32 van phat duoc am bao.
+
+Trang thai canh bao hien tai nam trong `/api/esp32/`:
+
+```json
+{
+  "alert": {
+    "active_key": "temperature",
+    "level": "warning",
+    "last_alert_at": 1710000000.0
+  }
+}
+```
 
 ### Status
 
@@ -493,6 +521,139 @@ Rule moi: temperature > 60 -> fan off
 ```
 
 Khong conflict vi hai khoang khong giao nhau.
+
+## Temperature Alert Algorithm
+
+Co che canh bao nhiet do nam o `monitoring/alerts.py`. Muc tieu la khong chi canh bao theo nguong cung, ma con nhin vao du lieu qua khu trong database de phat hien nhiet do tang bat thuong so voi moi truong gan day.
+
+Moi lan ESP32 gui `sensor_data`, server lay:
+
+- `T`: nhiet do hien tai tu packet ESP32.
+- `H`: 10 ban ghi `SensorReading` moi nhat trong database.
+- `avg(H)`: nhiet do trung binh gan day.
+- `latest(H)`: nhiet do moi nhat trong lich su.
+
+Server tinh `risk_score` theo cong thuc cong diem:
+
+```text
+risk_score = absolute_threshold_score
+           + average_delta_score
+           + trend_delta_score
+```
+
+### 1. Diem nguong tuyet doi
+
+```text
+Neu T >= 40 do C: +70 diem
+Neu 35 <= T < 40 do C: +40 diem
+Neu T < 35 do C: +0 diem
+```
+
+Y nghia:
+
+- Tu 35 do C tro len la nong, can co kha nang warning.
+- Tu 40 do C tro len la vung nguy hiem, gan cham muc critical neu co them dau hieu tang nhanh.
+
+### 2. Diem lech so voi trung binh gan day
+
+Chi tinh khi database co lich su nhiet do.
+
+```text
+average_delta = T - avg(H)
+
+Neu average_delta >= 5: +30 diem
+Neu average_delta >= 3: +15 diem
+Neu average_delta < 3:  +0 diem
+```
+
+Y nghia: cung la 35 do C, nhung neu truoc do phong chi quanh 29-30 do C thi day la bien dong bat thuong va can canh bao manh hon.
+
+### 3. Diem xu huong tang nhanh
+
+Chi tinh khi database co lich su nhiet do.
+
+```text
+trend_delta = T - latest(H)
+
+Neu trend_delta >= 4: +25 diem
+Neu trend_delta >= 2: +10 diem
+Neu trend_delta < 2:  +0 diem
+```
+
+Y nghia: neu nhiet do vua tang nhanh so voi lan doc gan nhat thi rui ro cao hon, vi co the dang co nguon nhiet bat thuong.
+
+### 4. Phan loai muc canh bao
+
+```text
+Neu risk_score >= 80: critical
+Neu risk_score >= 40: warning
+Neu risk_score < 40:  khong canh bao
+```
+
+Vi du:
+
+```text
+T = 36, H rong
+risk_score = 40
+=> warning
+```
+
+```text
+T = 35, avg(H) = 29.5, latest(H) = 29
+risk_score = 40 + 30 + 25 = 95
+=> critical
+```
+
+```text
+T = 41, avg(H) = 30, latest(H) = 30
+risk_score = 70 + 30 + 25 = 125
+=> critical
+```
+
+### 5. Cooldown va escalation
+
+De tranh loa ESP32 bi spam lien tuc, server dung cooldown:
+
+```text
+ALERT_COOLDOWN_SECONDS = 60
+```
+
+Neu canh bao cung muc lap lai trong 60 giay, server khong gui lai audio. Tuy nhien neu muc canh bao tang tu `warning` len `critical`, server gui ngay lap tuc, khong doi cooldown.
+
+```text
+should_alert = escalated OR cooldown_elapsed
+```
+
+Trong do:
+
+- `escalated`: muc moi cao hon muc canh bao truoc do.
+- `cooldown_elapsed`: da qua it nhat 60 giay tu lan canh bao gan nhat.
+
+### 6. Dieu kien recovery
+
+Khi nhiet do ha ve nguong an toan:
+
+```text
+TEMPERATURE_RECOVERY_THRESHOLD = 33 do C
+```
+
+Neu khong con level canh bao va `T <= 33`, server xoa trang thai canh bao trong RAM:
+
+```text
+alert_active_key = None
+alert_level = None
+```
+
+### Pseudocode
+
+```python
+history = SensorReading.objects.order_by('-created_at')[:10]
+risk_score = threshold_score(T) + average_score(T, history) + trend_score(T, history)
+level = 'critical' if risk_score >= 80 else 'warning' if risk_score >= 40 else None
+
+if level and (level_escalated(level) or cooldown_elapsed(60)):
+    send_warning_audio_to_esp32(level, risk_score)
+```
 
 ## Dashboard
 
