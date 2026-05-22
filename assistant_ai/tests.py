@@ -188,6 +188,41 @@ class LLMIntentApiTests(TestCase):
         self.assertEqual(intent['automation_rules'][0]['action']['value'], 80)
 
     @patch('assistant_ai.services.chat_with_llm')
+    def test_parse_iot_intent_fills_missing_automation_condition_from_text(self, chat_with_llm):
+        chat_with_llm.return_value = LLMResponse(
+            text=(
+                '{"commands":[],"automation_rules":[{"operation":"create","name":"Hot fan"}],'
+                '"reply_message":"Da tao rule."}'
+            ),
+            raw={},
+        )
+
+        intent = parse_iot_intent('khi nhiet do tren 30 thi bat quat 80%')
+
+        rule = intent['automation_rules'][0]
+        self.assertEqual(rule['condition'], {'field': 'temperature', 'operator': '>', 'value': 30.0})
+        self.assertEqual(rule['action']['target'], 'fan')
+        self.assertTrue(rule['action']['state'])
+        self.assertEqual(rule['action']['value'], 80)
+
+    @patch('assistant_ai.services.chat_with_llm')
+    def test_parse_iot_intent_replaces_empty_automation_conditions_from_text(self, chat_with_llm):
+        chat_with_llm.return_value = LLMResponse(
+            text=(
+                '{"commands":[],"automation_rules":[{"operation":"create","conditions":[],'
+                '"action":{"target":"fan","state":true,"value":80}}],'
+                '"reply_message":"Da tao rule."}'
+            ),
+            raw={},
+        )
+
+        intent = parse_iot_intent('khi nhiệt độ trên 30 thì bật quạt 80%')
+
+        rule = intent['automation_rules'][0]
+        self.assertEqual(rule['conditions'], [{'field': 'temperature', 'operator': '>', 'value': 30.0}])
+        self.assertEqual(rule['condition'], rule['conditions'][0])
+
+    @patch('assistant_ai.services.chat_with_llm')
     def test_parse_iot_intent_accepts_range_automation_rule_request(self, chat_with_llm):
         chat_with_llm.return_value = LLMResponse(
             text=(

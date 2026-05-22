@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import threading
 import time
 import unicodedata
@@ -58,7 +59,7 @@ Quy tắc commands:
 }
 
 Quy tắc automation_rules:
-- Yêu cầu kiểu "khi... thì..." là tạo rule tự động.
+- Yêu cầu kiểu "khi... thì..." hoặc "nếu... thì..." là tạo rule tự động.
 - Ví dụ: "khi nhiệt độ trên 30 thì bật quạt 80%" → create rule temperature > 30, fan on value 80.
 - Nếu có khoảng điều kiện như "trên 30 và dưới 50", dùng conditions với nhiều điều kiện AND.
 - Nếu chỉ tạo rule tự động, commands phải là [].
@@ -136,6 +137,7 @@ def chat_with_llm(message: str, context: dict[str, Any] | None = None) -> LLMRes
 def parse_iot_intent(user_text: str, context: dict[str, Any] | None = None) -> dict[str, Any]:
     response = chat_with_llm(user_text, context=context)
     parsed = normalize_llm_schema(parse_json_object(response.text))
+    parsed = complete_automation_rule_from_text(parsed, user_text)
     automation_rules = parse_automation_rule_requests(parsed.get('automation_rules'))
     commands = parse_intent_commands(
         parsed,
@@ -162,6 +164,149 @@ def parse_iot_intent(user_text: str, context: dict[str, Any] | None = None) -> d
         intent.update(commands[0])
 
     return intent
+
+
+def complete_automation_rule_from_text(parsed: dict[str, Any], user_text: str) -> dict[str, Any]:
+    if not is_automation_request(user_text):
+        return parsed
+
+    fallback_rule = build_automation_rule_from_text(user_text)
+    if fallback_rule is None:
+        return parsed
+
+    raw_rules = parsed.get('automation_rules')
+    if raw_rules in (None, []):
+        return {
+            **parsed,
+            'commands': parsed.get('commands', []),
+            'automation_rules': [fallback_rule],
+        }
+
+    if isinstance(raw_rules, dict):
+        raw_rules = [raw_rules]
+
+    if not isinstance(raw_rules, list):
+        return parsed
+
+    completed_rules = []
+    for raw_rule in raw_rules:
+        if not isinstance(raw_rule, dict):
+            completed_rules.append(raw_rule)
+            continue
+
+        completed_rule = {
+            **fallback_rule,
+            **raw_rule,
+        }
+        if not completed_rule.get('conditions'):
+            completed_rule['conditions'] = fallback_rule['conditions']
+        if not completed_rule.get('condition'):
+            completed_rule['condition'] = fallback_rule['condition']
+        if not completed_rule.get('action'):
+            completed_rule['action'] = fallback_rule['action']
+        if not completed_rule.get('operation'):
+            completed_rule['operation'] = fallback_rule['operation']
+        if not completed_rule.get('name'):
+            completed_rule['name'] = fallback_rule['name']
+
+        completed_rules.append(completed_rule)
+
+    return {
+        **parsed,
+        'commands': parsed.get('commands', []),
+        'automation_rules': completed_rules,
+    }
+
+
+def build_automation_rule_from_text(user_text: str) -> dict[str, Any] | None:
+    normalized = normalize_vietnamese_text(user_text)
+    condition = build_condition_from_text(normalized)
+    action = build_action_from_text(normalized)
+    if condition is None or action is None:
+        return None
+
+    target_label = 'quat' if action['target'] == 'fan' else 'den'
+    return {
+        'operation': 'create',
+        'name': f'Rule {target_label} tu dong',
+        'description': '',
+        'is_enabled': True,
+        'condition': condition[0],
+        'conditions': condition,
+        'action': action,
+    }
+
+
+def build_condition_from_text(normalized_text: str) -> list[dict[str, Any]] | None:
+    field = None
+    if 'nhiet do' in normalized_text or 'nong' in normalized_text:
+        field = 'temperature'
+    elif 'do am' in normalized_text or 'am do' in normalized_text:
+        field = 'humidity'
+    elif 'anh sang' in normalized_text or 'do sang' in normalized_text or 'troi toi' in normalized_text:
+        field = 'light'
+
+    if field is None:
+        return None
+
+    conditions = []
+    condition_patterns = [
+        (r'(?:tren|lon hon|cao hon)\s+(\d+(?:[.,]\d+)?)', '>'),
+        (r'(?:duoi|nho hon|be hon|thap hon)\s+(\d+(?:[.,]\d+)?)', '<'),
+        (r'(?:bang|=)\s+(\d+(?:[.,]\d+)?)', '=='),
+    ]
+    for pattern, operator_name in condition_patterns:
+        for match in re.finditer(pattern, normalized_text):
+            conditions.append(
+                {
+                    'field': field,
+                    'operator': operator_name,
+                    'value': parse_text_number(match.group(1)),
+                }
+            )
+
+    return conditions or None
+
+
+def build_action_from_text(normalized_text: str) -> dict[str, Any] | None:
+    then_text = normalized_text.split(' thi ', 1)[1] if ' thi ' in normalized_text else normalized_text
+
+    if 'quat' in then_text or 'fan' in then_text:
+        target = 'fan'
+    elif 'den' in then_text or 'led' in then_text:
+        target = 'led'
+    else:
+        return None
+
+    if 'tat' in then_text:
+        state = False
+    elif 'bat' in then_text or 'mo' in then_text:
+        state = True
+    else:
+        return None
+
+    value = parse_action_value_from_text(then_text)
+    if value is None:
+        value = 100 if state else 0
+
+    return {
+        'target': target,
+        'state': state,
+        'value': value,
+        'cooldown_seconds': 60,
+    }
+
+
+def parse_action_value_from_text(text: str) -> int | None:
+    match = re.search(r'(\d+(?:[.,]\d+)?)\s*(?:%|phan tram)?', text)
+    if match is None:
+        return None
+
+    return parse_output_value(match.group(1))
+
+
+def parse_text_number(value: str) -> float:
+    return float(value.replace(',', '.'))
 
 
 def normalize_llm_schema(parsed: dict[str, Any]) -> dict[str, Any]:
