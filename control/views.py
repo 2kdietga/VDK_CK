@@ -42,10 +42,7 @@ def send_command(request: HttpRequest) -> JsonResponse:
     if not isinstance(target, str):
         target = ''
 
-    channel_layer = get_channel_layer()
-    async_to_sync(channel_layer.group_send)(ESP32_GROUP_NAME, command)
     sent_at = timezone.now()
-
     CommandLog.objects.create(
         command_id=command['command_id'],
         name=name,
@@ -55,6 +52,9 @@ def send_command(request: HttpRequest) -> JsonResponse:
         status=CommandLog.Status.SENT,
         sent_at=sent_at,
     )
+
+    channel_layer = get_channel_layer()
+    async_to_sync(channel_layer.group_send)(ESP32_GROUP_NAME, command)
 
     return JsonResponse(
         {
