@@ -113,6 +113,7 @@ Additional multi-command requirement:
 - Use outputs.fan.state/value and outputs.led.state/value for fan and LED state.
 - If the requested current value is missing, say you do not have that data yet. Do not invent values.
 - If the user asks to create, change, enable, disable, or delete an automation rule, include automation_rules.
+- For range rules such as "tren 30 va duoi 50", put both limits in automation_rules[].conditions. Conditions are AND.
 - Automation JSON shape:
   {
     "automation_rules": [
@@ -120,11 +121,13 @@ Additional multi-command requirement:
         "operation": "create" | "update" | "upsert" | "enable" | "disable" | "delete",
         "name": "short rule name or null",
         "condition": {"field": "temperature" | "humidity" | "light", "operator": ">" | ">=" | "<" | "<=" | "==" | "!=", "value": number},
+        "conditions": [{"field": "temperature" | "humidity" | "light", "operator": ">" | ">=" | "<" | "<=" | "==" | "!=", "value": number}],
         "action": {"target": "fan" | "led" | "light", "state": true | false, "value": 0-100 | null, "cooldown_seconds": integer | null}
       }
     ]
   }
 - Example: "khi nhiet do tren 30 thi bat quat 80 phan tram" means create one automation rule with temperature > 30 and fan on value 80.
+- Example: "khi nhiet do tren 30 va duoi 50 thi bat quat" means create one automation rule with conditions temperature > 30 AND temperature < 50.
 - Example: "khi troi toi duoi 300 thi bat den" means create one automation rule with light < 300 and led on.
 - For automation-only requests, commands may be an empty list.
 
@@ -212,6 +215,7 @@ Each item in automation_rules must use:
   "operation": "create" | "update" | "upsert" | "enable" | "disable" | "delete",
   "name": "short rule name or null",
   "condition": {"field": "temperature" | "humidity" | "light", "operator": ">" | ">=" | "<" | "<=" | "==" | "!=", "value": number},
+  "conditions": [{"field": "temperature" | "humidity" | "light", "operator": ">" | ">=" | "<" | "<=" | "==" | "!=", "value": number}],
   "action": {"target": "fan" | "led" | "light", "state": true | false, "value": 0-100 | null, "cooldown_seconds": integer | null}
 }
 
@@ -232,6 +236,25 @@ Return:
     }
   ],
   "reply_message": "Da tao rule bat quat 80 phan tram khi nhiet do tren 30 do."
+}
+
+Correct range automation example:
+User: "khi nhiet do tren 30 va duoi 50 thi bat quat"
+Return:
+{
+  "commands": [],
+  "automation_rules": [
+    {
+      "operation": "create",
+      "name": "Bat quat khi nhiet do tu 30 den 50",
+      "conditions": [
+        {"field": "temperature", "operator": ">", "value": 30},
+        {"field": "temperature", "operator": "<", "value": 50}
+      ],
+      "action": {"target": "fan", "state": true, "value": 100, "cooldown_seconds": 60}
+    }
+  ],
+  "reply_message": "Da tao rule bat quat khi nhiet do tren 30 va duoi 50 do."
 }
 
 Correct immediate-control example:
@@ -316,18 +339,19 @@ def normalize_llm_schema(parsed: dict[str, Any]) -> dict[str, Any]:
         'is_enabled': parsed.get('is_enabled', True),
     }
 
-    condition = parsed.get('condition') or parsed.get('conditions')
-    if isinstance(condition, list):
-        condition = condition[0] if condition else None
-    if condition is None:
-        condition = build_automation_condition_from_flat_payload(parsed)
+    conditions = parsed.get('conditions')
+    condition = parsed.get('condition')
+    if conditions is None and condition is not None:
+        conditions = condition
+    if conditions is None:
+        conditions = build_automation_condition_from_flat_payload(parsed)
 
     rule_action = parsed.get('rule_action') or parsed.get('then') or parsed.get('output_action')
     if rule_action is None:
         rule_action = build_automation_action_from_flat_payload(parsed)
 
-    if condition is not None:
-        automation_rule['condition'] = condition
+    if conditions is not None:
+        automation_rule['conditions'] = conditions
     if rule_action is not None:
         automation_rule['action'] = rule_action
 
@@ -440,10 +464,25 @@ def parse_automation_rule_request(raw_request: Any) -> dict[str, Any]:
     }
 
     if operation in {'create', 'update', 'upsert'}:
-        request['condition'] = parse_automation_condition(raw_request.get('condition'))
+        request['conditions'] = parse_automation_conditions(raw_request)
+        request['condition'] = request['conditions'][0]
         request['action'] = parse_automation_action(raw_request.get('action'))
 
     return request
+
+
+def parse_automation_conditions(raw_request: dict[str, Any]) -> list[dict[str, Any]]:
+    raw_conditions = raw_request.get('conditions')
+    if raw_conditions is None:
+        raw_conditions = raw_request.get('condition')
+
+    if isinstance(raw_conditions, dict):
+        raw_conditions = [raw_conditions]
+
+    if not isinstance(raw_conditions, list) or not raw_conditions:
+        raise LLMIntentParseError('automation conditions must be a non-empty list.')
+
+    return [parse_automation_condition(raw_condition) for raw_condition in raw_conditions]
 
 
 def parse_automation_condition(raw_condition: Any) -> dict[str, Any]:

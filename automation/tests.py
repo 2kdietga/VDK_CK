@@ -3,7 +3,7 @@ from django.test import TestCase
 from control.models import CommandLog, OutputTarget
 
 from .models import AutomationRule
-from .services import apply_automation_rule_requests, evaluate_automation_rules
+from .services import apply_automation_rule_requests, evaluate_automation_rules, rule_matches
 
 
 class AutomationRuleEngineTests(TestCase):
@@ -41,6 +41,28 @@ class AutomationRuleEngineTests(TestCase):
         rule.refresh_from_db()
         self.assertEqual(rule.conditions[0]['value'], 32)
         self.assertEqual(rule.action['params']['value'], 90)
+
+    def test_voice_rule_request_creates_range_rule_with_multiple_conditions(self):
+        apply_automation_rule_requests(
+            [
+                {
+                    'operation': 'create',
+                    'name': 'Comfort fan',
+                    'conditions': [
+                        {'field': 'temperature', 'operator': '>', 'value': 30},
+                        {'field': 'temperature', 'operator': '<', 'value': 50},
+                    ],
+                    'action': {'target': 'fan', 'state': True, 'value': 80, 'cooldown_seconds': 60},
+                    'is_enabled': True,
+                }
+            ]
+        )
+
+        rule = AutomationRule.objects.get(name='Comfort fan')
+        self.assertEqual(len(rule.conditions), 2)
+        self.assertTrue(rule_matches(rule, {'temperature': 40}))
+        self.assertFalse(rule_matches(rule, {'temperature': 25}))
+        self.assertFalse(rule_matches(rule, {'temperature': 55}))
 
     def test_voice_rule_request_can_disable_and_delete_rule(self):
         AutomationRule.objects.create(
@@ -86,6 +108,51 @@ class AutomationRuleEngineTests(TestCase):
         self.assertFalse(old_rule.is_enabled)
         self.assertTrue(new_rule.is_enabled)
         self.assertIn('Disabled conflicting rules: Fan on when hot.', results[0])
+
+    def test_range_rule_conflict_uses_combined_range(self):
+        AutomationRule.objects.create(
+            name='Fan on comfort range',
+            conditions=[
+                {'field': 'temperature', 'operator': '>', 'value': 30},
+                {'field': 'temperature', 'operator': '<', 'value': 50},
+            ],
+            action={
+                'name': 'set_output',
+                'params': {'target': 'fan', 'state': True, 'value': 80},
+                'cooldown_seconds': 60,
+            },
+            is_enabled=True,
+        )
+
+        apply_automation_rule_requests(
+            [
+                {
+                    'operation': 'create',
+                    'name': 'Fan off very hot',
+                    'condition': {'field': 'temperature', 'operator': '>', 'value': 60},
+                    'action': {'target': 'fan', 'state': False, 'value': 0, 'cooldown_seconds': 60},
+                    'is_enabled': True,
+                }
+            ]
+        )
+
+        old_rule = AutomationRule.objects.get(name='Fan on comfort range')
+        self.assertTrue(old_rule.is_enabled)
+
+        apply_automation_rule_requests(
+            [
+                {
+                    'operation': 'create',
+                    'name': 'Fan off middle range',
+                    'condition': {'field': 'temperature', 'operator': '>', 'value': 40},
+                    'action': {'target': 'fan', 'state': False, 'value': 0, 'cooldown_seconds': 60},
+                    'is_enabled': True,
+                }
+            ]
+        )
+
+        old_rule.refresh_from_db()
+        self.assertFalse(old_rule.is_enabled)
 
     def test_matching_rule_builds_command_and_command_log(self):
         OutputTarget.objects.update_or_create(

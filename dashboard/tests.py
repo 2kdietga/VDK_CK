@@ -82,6 +82,42 @@ class DashboardPageTests(TestCase):
         self.assertEqual(delete_response.status_code, 302)
         self.assertFalse(AutomationRule.objects.filter(id=rule.id).exists())
 
+    def test_rules_page_creates_range_rule_with_second_condition(self):
+        response = Client(HTTP_HOST='localhost').post(
+            '/dashboard/rules/',
+            data={
+                'form_action': 'save',
+                'name': 'Comfort fan',
+                'description': 'Turn fan on between 30 and 50 degrees',
+                'is_enabled': 'on',
+                'field': 'temperature',
+                'operator': '>',
+                'threshold': '30',
+                'use_second_condition': 'on',
+                'field2': 'temperature',
+                'operator2': '<',
+                'threshold2': '50',
+                'target': 'fan',
+                'state': 'on',
+                'value': '80',
+                'cooldown_seconds': '60',
+            },
+        )
+
+        self.assertEqual(response.status_code, 302)
+        rule = AutomationRule.objects.get(name='Comfort fan')
+        self.assertEqual(
+            rule.conditions,
+            [
+                {'field': 'temperature', 'operator': '>', 'value': 30.0},
+                {'field': 'temperature', 'operator': '<', 'value': 50.0},
+            ],
+        )
+
+        rules_response = Client(HTTP_HOST='localhost').get('/dashboard/rules/')
+        self.assertContains(rules_response, 'Temperature is above 30.0 AND Temperature is below 50.0')
+        self.assertContains(rules_response, 'Add second condition')
+
     def test_commands_page_renders_readable_command_fields(self):
         CommandLog.objects.create(
             command_id='abc123456789',

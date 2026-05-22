@@ -26,7 +26,7 @@
       <div class="rule-list">
         {% for row in rule_rows %}
           {% with rule=row.rule form=row.form form_id=rule.id submit_label="Save Changes" %}
-            <details class="rule-item" {% if forloop.first %}open{% endif %}>
+            <details class="rule-item">
               <summary>
                 <span>
                   <strong>{{ rule.name }}</strong>

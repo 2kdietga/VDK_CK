@@ -45,6 +45,40 @@
       <input name="threshold" type="number" step="0.1" value="{{ form.threshold|default:30 }}" required>
     </label>
   </div>
+
+  <label class="checkbox-field">
+    <input name="use_second_condition" type="checkbox" {% if form.use_second_condition %}checked{% endif %}>
+    <span>Add second condition</span>
+  </label>
+
+  <div class="rule-fields three">
+    {% with selected_field=form.field2|default:"temperature" %}
+      <label class="form-field">
+        <span>And Reading</span>
+        <select name="field2">
+          {% for value,label in field_options %}
+            <option value="{{ value }}" {% if value == selected_field %}selected{% endif %}>{{ label }}</option>
+          {% endfor %}
+        </select>
+      </label>
+    {% endwith %}
+
+    {% with selected_operator=form.operator2|default:"<" %}
+      <label class="form-field">
+        <span>And Condition</span>
+        <select name="operator2">
+          {% for value,label in operator_options %}
+            <option value="{{ value }}" {% if value == selected_operator %}selected{% endif %}>{{ label }}</option>
+          {% endfor %}
+        </select>
+      </label>
+    {% endwith %}
+
+    <label class="form-field">
+      <span>And Value</span>
+      <input name="threshold2" type="number" step="0.1" value="{{ form.threshold2|default:50 }}">
+    </label>
+  </div>
 </div>
 
 <div class="rule-section">

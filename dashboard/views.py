@@ -182,6 +182,36 @@ def parse_rule_post(post_data):
     except ValueError:
         return {'error': 'Condition value must be a number.'}
 
+    conditions = [
+        {
+            'field': field,
+            'operator': operator,
+            'value': threshold,
+        }
+    ]
+
+    if post_data.get('use_second_condition') == 'on':
+        field2 = post_data.get('field2')
+        if field2 not in {'temperature', 'humidity', 'light'}:
+            return {'error': 'Second condition field is invalid.'}
+
+        operator2 = post_data.get('operator2')
+        if operator2 not in {'>', '>=', '<', '<=', '==', '!='}:
+            return {'error': 'Second condition operator is invalid.'}
+
+        try:
+            threshold2 = float(post_data.get('threshold2', ''))
+        except ValueError:
+            return {'error': 'Second condition value must be a number.'}
+
+        conditions.append(
+            {
+                'field': field2,
+                'operator': operator2,
+                'value': threshold2,
+            }
+        )
+
     target = post_data.get('target')
     if target not in {'led', 'fan'}:
         return {'error': 'Target must be LED or fan.'}
@@ -211,13 +241,7 @@ def parse_rule_post(post_data):
         'name': name,
         'description': post_data.get('description', '').strip(),
         'is_enabled': post_data.get('is_enabled') == 'on',
-        'conditions': [
-            {
-                'field': field,
-                'operator': operator,
-                'value': threshold,
-            }
-        ],
+        'conditions': conditions,
         'action': {
             'name': 'set_output',
             'params': {
@@ -243,7 +267,8 @@ def build_rule_rows(rules):
 
 
 def rule_form_data(rule):
-    condition = first_dict(rule.conditions)
+    condition = condition_at(rule.conditions, 0)
+    second_condition = condition_at(rule.conditions, 1)
     action = rule.action if isinstance(rule.action, dict) else {}
     params = action.get('params') if isinstance(action.get('params'), dict) else {}
     state = params.get('state')
@@ -251,11 +276,21 @@ def rule_form_data(rule):
         'field': condition.get('field', 'temperature'),
         'operator': condition.get('operator', '>'),
         'threshold': condition.get('value', 30),
+        'use_second_condition': bool(second_condition),
+        'field2': second_condition.get('field', condition.get('field', 'temperature')),
+        'operator2': second_condition.get('operator', '<'),
+        'threshold2': second_condition.get('value', 50),
         'target': params.get('target', 'fan'),
         'state': 'on' if state is not False else 'off',
         'value': params.get('value', 100 if state is not False else 0),
         'cooldown_seconds': action.get('cooldown_seconds', 60),
     }
+
+
+def condition_at(value, index):
+    if isinstance(value, list) and len(value) > index and isinstance(value[index], dict):
+        return value[index]
+    return {}
 
 
 def first_dict(value):
@@ -265,11 +300,18 @@ def first_dict(value):
 
 
 def format_rule_condition(rule):
-    condition = first_dict(rule.conditions)
-    field = dict(rule_field_options()).get(condition.get('field'), condition.get('field', 'Sensor'))
-    operator_label = dict(rule_operator_options()).get(condition.get('operator'), condition.get('operator', '?'))
-    value = condition.get('value', '--')
-    return f'{field} {operator_label} {value}'
+    conditions = rule.conditions if isinstance(rule.conditions, list) else []
+    labels = []
+    for condition in conditions:
+        if not isinstance(condition, dict):
+            continue
+
+        field = dict(rule_field_options()).get(condition.get('field'), condition.get('field', 'Sensor'))
+        operator_label = dict(rule_operator_options()).get(condition.get('operator'), condition.get('operator', '?'))
+        value = condition.get('value', '--')
+        labels.append(f'{field} {operator_label} {value}')
+
+    return ' AND '.join(labels) if labels else 'No condition'
 
 
 def format_rule_action(rule):

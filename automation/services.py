@@ -119,19 +119,9 @@ def apply_automation_rule_request(request: dict[str, Any]) -> str:
 
 
 def build_rule_data_from_request(request: dict[str, Any]) -> dict[str, Any] | None:
-    condition = request.get('condition')
+    conditions = normalize_rule_conditions(request)
     action = request.get('action')
-    if not isinstance(condition, dict) or not isinstance(action, dict):
-        return None
-
-    field = normalize_field(condition.get('field'))
-    operator_name = condition.get('operator')
-    if field not in ALLOWED_RULE_FIELDS or operator_name not in OPERATORS:
-        return None
-
-    try:
-        threshold = float(condition.get('value'))
-    except (TypeError, ValueError):
+    if not conditions or not isinstance(action, dict):
         return None
 
     target = normalize_target(action.get('target'))
@@ -145,13 +135,7 @@ def build_rule_data_from_request(request: dict[str, Any]) -> dict[str, Any] | No
 
     cooldown_seconds = parse_cooldown_seconds(action.get('cooldown_seconds'))
     return {
-        'conditions': [
-            {
-                'field': field,
-                'operator': operator_name,
-                'value': threshold,
-            }
-        ],
+        'conditions': conditions,
         'action': {
             'name': 'set_output',
             'params': {
@@ -162,6 +146,43 @@ def build_rule_data_from_request(request: dict[str, Any]) -> dict[str, Any] | No
             'cooldown_seconds': cooldown_seconds,
         },
     }
+
+
+def normalize_rule_conditions(request: dict[str, Any]) -> list[dict[str, Any]] | None:
+    raw_conditions = request.get('conditions')
+    if raw_conditions is None:
+        raw_conditions = request.get('condition')
+
+    if isinstance(raw_conditions, dict):
+        raw_conditions = [raw_conditions]
+
+    if not isinstance(raw_conditions, list) or not raw_conditions:
+        return None
+
+    conditions = []
+    for condition in raw_conditions:
+        if not isinstance(condition, dict):
+            return None
+
+        field = normalize_field(condition.get('field'))
+        operator_name = condition.get('operator')
+        if field not in ALLOWED_RULE_FIELDS or operator_name not in OPERATORS:
+            return None
+
+        try:
+            threshold = float(condition.get('value'))
+        except (TypeError, ValueError):
+            return None
+
+        conditions.append(
+            {
+                'field': field,
+                'operator': operator_name,
+                'value': threshold,
+            }
+        )
+
+    return conditions
 
 
 def normalize_target(target: Any) -> str | None:
@@ -182,29 +203,29 @@ def default_rule_name(condition: dict[str, Any], action: dict[str, Any]) -> str:
 
 
 def find_conflicting_rules(rule_name: str, rule_data: dict[str, Any]):
-    new_condition = first_condition(rule_data.get('conditions'))
+    new_conditions = normalized_conditions(rule_data.get('conditions'))
     new_params = action_params(rule_data.get('action'))
-    if not new_condition or not new_params:
+    if not new_conditions or not new_params:
         return AutomationRule.objects.none()
 
     candidates = AutomationRule.objects.filter(is_enabled=True).exclude(name=rule_name)
     conflict_ids = []
     for rule in candidates:
-        existing_condition = first_condition(rule.conditions)
+        existing_conditions = normalized_conditions(rule.conditions)
         existing_params = action_params(rule.action)
-        if rules_conflict(new_condition, new_params, existing_condition, existing_params):
+        if rules_conflict(new_conditions, new_params, existing_conditions, existing_params):
             conflict_ids.append(rule.id)
 
     return AutomationRule.objects.filter(id__in=conflict_ids)
 
 
 def rules_conflict(
-    new_condition: dict[str, Any],
+    new_conditions: list[dict[str, Any]],
     new_params: dict[str, Any],
-    existing_condition: dict[str, Any] | None,
+    existing_conditions: list[dict[str, Any]],
     existing_params: dict[str, Any] | None,
 ) -> bool:
-    if not existing_condition or not existing_params:
+    if not existing_conditions or not existing_params:
         return False
 
     if new_params.get('target') != existing_params.get('target'):
@@ -213,16 +234,34 @@ def rules_conflict(
     if new_params == existing_params:
         return False
 
-    if normalize_field(new_condition.get('field')) != normalize_field(existing_condition.get('field')):
+    new_range = conditions_to_single_field_range(new_conditions)
+    existing_range = conditions_to_single_field_range(existing_conditions)
+    if new_range is None or existing_range is None:
+        return True
+
+    new_field, new_min, new_max = new_range
+    existing_field, existing_min, existing_max = existing_range
+    if new_field != existing_field:
         return False
 
-    return condition_ranges_overlap(new_condition, existing_condition)
+    return new_min <= existing_max and existing_min <= new_max
 
 
 def first_condition(conditions: Any) -> dict[str, Any] | None:
     if isinstance(conditions, list) and conditions and isinstance(conditions[0], dict):
         return conditions[0]
     return None
+
+
+def normalized_conditions(conditions: Any) -> list[dict[str, Any]]:
+    if not isinstance(conditions, list):
+        return []
+
+    normalized = []
+    for condition in conditions:
+        if isinstance(condition, dict):
+            normalized.append(condition)
+    return normalized
 
 
 def action_params(action: Any) -> dict[str, Any] | None:
@@ -245,6 +284,34 @@ def condition_ranges_overlap(left: dict[str, Any], right: dict[str, Any]) -> boo
     left_min, left_max = left_range
     right_min, right_max = right_range
     return left_min <= right_max and right_min <= left_max
+
+
+def conditions_to_single_field_range(conditions: list[dict[str, Any]]) -> tuple[str, float, float] | None:
+    field = None
+    min_value = float('-inf')
+    max_value = float('inf')
+
+    for condition in conditions:
+        condition_field = normalize_field(condition.get('field'))
+        if condition_field is None:
+            return None
+        if field is None:
+            field = condition_field
+        elif field != condition_field:
+            return None
+
+        condition_range = condition_to_range(condition)
+        if condition_range is None:
+            return None
+
+        condition_min, condition_max = condition_range
+        min_value = max(min_value, condition_min)
+        max_value = min(max_value, condition_max)
+
+    if field is None:
+        return None
+
+    return field, min_value, max_value
 
 
 def condition_to_range(condition: dict[str, Any]) -> tuple[float, float] | None:
