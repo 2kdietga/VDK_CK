@@ -3,6 +3,7 @@ from unittest.mock import patch
 
 from django.test import Client, TestCase
 
+from automation.models import AutomationRule
 from control.models import OutputTarget
 from gateway.protocol import get_esp32_state
 
@@ -65,6 +66,32 @@ class LLMIntentApiTests(TestCase):
             },
         )
 
+    @patch('assistant_ai.views.parse_iot_intent')
+    def test_intent_api_applies_automation_rule_requests(self, parse_iot_intent):
+        parse_iot_intent.return_value = {
+            'commands': [],
+            'automation_rules': [
+                {
+                    'operation': 'create',
+                    'name': 'Hot fan',
+                    'condition': {'field': 'temperature', 'operator': '>', 'value': 30},
+                    'action': {'target': 'fan', 'state': True, 'value': 80, 'cooldown_seconds': 60},
+                    'is_enabled': True,
+                }
+            ],
+            'reply_message': 'Da tao rule.',
+        }
+
+        response = Client().post(
+            '/api/llm/intent/',
+            data=json.dumps({'text': 'khi nhiet do tren 30 thi bat quat'}),
+            content_type='application/json',
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.json()['automation_applied'])
+        self.assertTrue(AutomationRule.objects.filter(name='Hot fan').exists())
+
     def test_parse_json_object_handles_markdown_fence(self):
         parsed = parse_json_object(
             '```json\n{"action": "turn_on", "device": "fan", "reply_message": "Đã bật quạt."}\n```'
@@ -112,6 +139,7 @@ class LLMIntentApiTests(TestCase):
         self.assertEqual(
             intent,
             {
+                'automation_rules': [],
                 'commands': [
                     {'action': 'turn_on', 'device': 'fan', 'value': None},
                     {'action': 'turn_on', 'device': 'light', 'value': None},
@@ -119,6 +147,64 @@ class LLMIntentApiTests(TestCase):
                 'reply_message': 'Da bat quat va den.',
             },
         )
+
+    @patch('assistant_ai.services.chat_with_llm')
+    def test_parse_iot_intent_accepts_automation_rule_request(self, chat_with_llm):
+        chat_with_llm.return_value = LLMResponse(
+            text=(
+                '{"commands":[],"automation_rules":['
+                '{"operation":"create","name":"Hot fan",'
+                '"condition":{"field":"temperature","operator":">","value":30},'
+                '"action":{"target":"fan","state":true,"value":80,"cooldown_seconds":45}}'
+                '],"reply_message":"Da tao rule bat quat khi nong."}'
+            ),
+            raw={},
+        )
+
+        intent = parse_iot_intent('khi nhiet do tren 30 thi bat quat 80 phan tram')
+
+        self.assertEqual(intent['commands'], [])
+        self.assertEqual(intent['automation_rules'][0]['operation'], 'create')
+        self.assertEqual(intent['automation_rules'][0]['condition']['field'], 'temperature')
+        self.assertEqual(intent['automation_rules'][0]['action']['target'], 'fan')
+        self.assertEqual(intent['automation_rules'][0]['action']['value'], 80)
+
+    @patch('assistant_ai.services.chat_with_llm')
+    def test_parse_iot_intent_treats_top_level_create_as_automation_rule(self, chat_with_llm):
+        chat_with_llm.return_value = LLMResponse(
+            text=(
+                '{"action":"create","name":"Hot fan",'
+                '"condition":{"field":"temperature","operator":">","value":30},'
+                '"rule_action":{"target":"fan","state":true,"value":80},'
+                '"reply_message":"Da tao rule bat quat khi nong."}'
+            ),
+            raw={},
+        )
+
+        intent = parse_iot_intent('khi nhiet do tren 30 thi bat quat 80 phan tram')
+
+        self.assertEqual(intent['commands'], [])
+        self.assertEqual(intent['automation_rules'][0]['operation'], 'create')
+        self.assertEqual(intent['automation_rules'][0]['condition']['value'], 30)
+        self.assertEqual(intent['automation_rules'][0]['action']['value'], 80)
+
+    @patch('assistant_ai.services.chat_with_llm')
+    def test_parse_iot_intent_drops_immediate_command_from_automation_request(self, chat_with_llm):
+        chat_with_llm.return_value = LLMResponse(
+            text=(
+                '{"commands":[{"action":"turn_on","device":"fan","value":50}],'
+                '"automation_rules":[{"operation":"create","name":"Cool fan",'
+                '"condition":{"field":"temperature","operator":"<","value":50},'
+                '"action":{"target":"fan","state":true,"value":50,"cooldown_seconds":60}}],'
+                '"reply_message":"Da tao rule."}'
+            ),
+            raw={},
+        )
+
+        intent = parse_iot_intent('khi nhiet do be hon 50 thi bat quat 50 phan tram')
+
+        self.assertEqual(intent['commands'], [])
+        self.assertNotIn('action', intent)
 
     @patch('assistant_ai.services.chat_with_llm')
     def test_parse_iot_intent_overrides_generic_sensor_reply_with_context_value(self, chat_with_llm):

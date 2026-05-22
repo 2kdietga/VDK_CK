@@ -216,6 +216,22 @@ class VoiceIntentCommandTests(TransactionTestCase):
             ],
         )
 
+    def test_automation_only_intent_does_not_build_output_commands(self):
+        commands = commands_from_intent(
+            {
+                'commands': [],
+                'automation_rules': [
+                    {
+                        'operation': 'create',
+                        'name': 'Hot fan',
+                    }
+                ],
+                'reply_message': 'Da tao rule.',
+            }
+        )
+
+        self.assertEqual(commands, [])
+
 
 class ESP32CommandApiTests(TransactionTestCase):
     def setUp(self):

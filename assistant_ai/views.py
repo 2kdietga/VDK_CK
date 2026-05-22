@@ -7,6 +7,8 @@ from django.http import HttpRequest, JsonResponse
 from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_POST
 
+from automation.services import apply_automation_rule_requests
+
 from .services import (
     LLMConfigurationError,
     LLMIntentParseError,
@@ -30,6 +32,10 @@ def intent_api(request: HttpRequest) -> JsonResponse:
 
     try:
         intent = parse_iot_intent(text.strip(), context=get_current_iot_context())
+        automation_rules = intent.get('automation_rules')
+        if isinstance(automation_rules, list) and automation_rules:
+            intent['automation_results'] = apply_automation_rule_requests(automation_rules)
+            intent['automation_applied'] = True
     except LLMConfigurationError as exc:
         return JsonResponse({'error': str(exc)}, status=500)
     except LLMProviderError as exc:

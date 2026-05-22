@@ -14,6 +14,9 @@ from groq import Groq
 DEFAULT_GROQ_MODEL = 'llama-3.1-8b-instant'
 ALLOWED_ACTIONS = {'turn_on', 'turn_off', 'get_status'}
 ALLOWED_DEVICES = {'light', 'fan', 'sensor'}
+ALLOWED_AUTOMATION_OPERATIONS = {'create', 'update', 'upsert', 'enable', 'disable', 'delete'}
+ALLOWED_AUTOMATION_FIELDS = {'temperature', 'humidity', 'light'}
+ALLOWED_AUTOMATION_TARGETS = {'led', 'fan', 'light'}
 IOT_INTENT_SYSTEM_PROMPT = '''Bạn là trợ lý AIoT dùng cho hệ thống giám sát môi trường ESP32.
 Nhiệm vụ của bạn là phân tích câu nói tiếng Việt của người dùng, sau đó trả về đúng một object JSON duy nhất.
 Không được thêm markdown, giải thích, chú thích hay bất kỳ nội dung nào ngoài JSON.
@@ -109,6 +112,138 @@ Additional multi-command requirement:
 - Use latest_sensor.temperature for temperature, latest_sensor.humidity for humidity, latest_sensor.light for light level.
 - Use outputs.fan.state/value and outputs.led.state/value for fan and LED state.
 - If the requested current value is missing, say you do not have that data yet. Do not invent values.
+- If the user asks to create, change, enable, disable, or delete an automation rule, include automation_rules.
+- Automation JSON shape:
+  {
+    "automation_rules": [
+      {
+        "operation": "create" | "update" | "upsert" | "enable" | "disable" | "delete",
+        "name": "short rule name or null",
+        "condition": {"field": "temperature" | "humidity" | "light", "operator": ">" | ">=" | "<" | "<=" | "==" | "!=", "value": number},
+        "action": {"target": "fan" | "led" | "light", "state": true | false, "value": 0-100 | null, "cooldown_seconds": integer | null}
+      }
+    ]
+  }
+- Example: "khi nhiet do tren 30 thi bat quat 80 phan tram" means create one automation rule with temperature > 30 and fan on value 80.
+- Example: "khi troi toi duoi 300 thi bat den" means create one automation rule with light < 300 and led on.
+- For automation-only requests, commands may be an empty list.
+
+QUY TẮC RẤT QUAN TRỌNG VỀ ACTION CẤP NGOÀI:
+
+Trường "action" ở cấp JSON ngoài cùng chỉ được nhận một trong ba giá trị:
+- "turn_on"
+- "turn_off"
+- "get_status"
+
+Tuyệt đối không được đặt:
+- "action": "create"
+- "action": "update"
+- "action": "delete"
+- "action": "enable"
+- "action": "disable"
+- "action": "upsert"
+
+Các giá trị create, update, upsert, enable, disable, delete chỉ được dùng trong:
+automation_rules[].operation
+
+Nếu người dùng yêu cầu tạo, sửa, bật, tắt hoặc xóa luật tự động hóa, thì JSON cấp ngoài phải dùng:
+{
+  "action": "get_status",
+  "device": "sensor",
+  "value": null
+}
+
+Sau đó mới thêm automation_rules.
+
+Ví dụ đúng:
+{
+  "action": "get_status",
+  "device": "sensor",
+  "value": null,
+  "reply_message": "Đã tạo luật tự động bật quạt khi nhiệt độ trên 30 độ.",
+  "automation_rules": [
+    {
+      "operation": "create",
+      "name": "bat_quat_khi_nong",
+      "condition": {
+        "field": "temperature",
+        "operator": ">",
+        "value": 30
+      },
+      "action": {
+        "target": "fan",
+        "state": true,
+        "value": 80,
+        "cooldown_seconds": null
+      }
+    }
+  ]
+}
+
+Ví dụ sai, tuyệt đối không được trả:
+{
+  "action": "create",
+  "device": "fan",
+  "value": 80
+'''
+
+IOT_INTENT_SYSTEM_PROMPT += '''
+
+FINAL OUTPUT CONTRACT - HIGHEST PRIORITY:
+
+Always return exactly this top-level shape:
+{
+  "commands": [],
+  "automation_rules": [],
+  "reply_message": "short Vietnamese reply"
+}
+
+Use commands only for immediate device control.
+Each item in commands may use:
+{
+  "action": "turn_on" | "turn_off" | "get_status",
+  "device": "light" | "fan" | "sensor",
+  "value": 0-100 | null
+}
+
+Use automation_rules only for automation/rule requests.
+Each item in automation_rules must use:
+{
+  "operation": "create" | "update" | "upsert" | "enable" | "disable" | "delete",
+  "name": "short rule name or null",
+  "condition": {"field": "temperature" | "humidity" | "light", "operator": ">" | ">=" | "<" | "<=" | "==" | "!=", "value": number},
+  "action": {"target": "fan" | "led" | "light", "state": true | false, "value": 0-100 | null, "cooldown_seconds": integer | null}
+}
+
+Never use create/update/upsert/enable/disable/delete as a top-level action.
+Top-level "action" is obsolete. Prefer commands[] and automation_rules[].
+
+Correct automation example:
+User: "khi nhiet do tren 30 thi bat quat 80 phan tram"
+Return:
+{
+  "commands": [],
+  "automation_rules": [
+    {
+      "operation": "create",
+      "name": "Bat quat khi nhiet do tren 30",
+      "condition": {"field": "temperature", "operator": ">", "value": 30},
+      "action": {"target": "fan", "state": true, "value": 80, "cooldown_seconds": 60}
+    }
+  ],
+  "reply_message": "Da tao rule bat quat 80 phan tram khi nhiet do tren 30 do."
+}
+
+Correct immediate-control example:
+User: "bat quat 80 phan tram"
+Return:
+{
+  "commands": [
+    {"action": "turn_on", "device": "fan", "value": 80}
+  ],
+  "automation_rules": [],
+  "reply_message": "Da bat quat muc 80 phan tram."
+}
 '''
 
 
@@ -141,8 +276,11 @@ def chat_with_llm(message: str, context: dict[str, Any] | None = None) -> LLMRes
 
 def parse_iot_intent(user_text: str, context: dict[str, Any] | None = None) -> dict[str, Any]:
     response = chat_with_llm(user_text, context=context)
-    parsed = parse_json_object(response.text)
-    commands = parse_intent_commands(parsed)
+    parsed = normalize_llm_schema(parse_json_object(response.text))
+    automation_rules = parse_automation_rule_requests(parsed.get('automation_rules'))
+    commands = parse_intent_commands(parsed, allow_empty=bool(automation_rules))
+    if automation_rules and is_automation_request(user_text):
+        commands = []
     reply_message = parsed.get('reply_message')
 
     if not isinstance(reply_message, str) or not reply_message.strip():
@@ -154,18 +292,93 @@ def parse_iot_intent(user_text: str, context: dict[str, Any] | None = None) -> d
 
     intent = {
         'commands': commands,
+        'automation_rules': automation_rules,
         'reply_message': reply_message.strip(),
     }
 
-    if len(commands) == 1:
+    if len(commands) == 1 and not automation_rules:
         intent.update(commands[0])
 
     return intent
 
 
-def parse_intent_commands(parsed: dict[str, Any]) -> list[dict[str, Any]]:
+def normalize_llm_schema(parsed: dict[str, Any]) -> dict[str, Any]:
+    if parsed.get('automation_rules') is not None:
+        return parsed
+
+    if parsed.get('action') not in ALLOWED_AUTOMATION_OPERATIONS:
+        return parsed
+
+    automation_rule = {
+        'operation': parsed.get('operation') or parsed.get('action'),
+        'name': parsed.get('name') or parsed.get('rule_name'),
+        'description': parsed.get('description', ''),
+        'is_enabled': parsed.get('is_enabled', True),
+    }
+
+    condition = parsed.get('condition') or parsed.get('conditions')
+    if isinstance(condition, list):
+        condition = condition[0] if condition else None
+    if condition is None:
+        condition = build_automation_condition_from_flat_payload(parsed)
+
+    rule_action = parsed.get('rule_action') or parsed.get('then') or parsed.get('output_action')
+    if rule_action is None:
+        rule_action = build_automation_action_from_flat_payload(parsed)
+
+    if condition is not None:
+        automation_rule['condition'] = condition
+    if rule_action is not None:
+        automation_rule['action'] = rule_action
+
+    return {
+        **parsed,
+        'commands': parsed.get('commands', []),
+        'automation_rules': [automation_rule],
+    }
+
+
+def build_automation_condition_from_flat_payload(parsed: dict[str, Any]) -> dict[str, Any] | None:
+    field = parsed.get('field') or parsed.get('sensor') or parsed.get('condition_field')
+    operator_name = parsed.get('operator') or parsed.get('condition_operator')
+    value = parsed.get('threshold') or parsed.get('condition_value')
+
+    if field is None or operator_name is None or value is None:
+        return None
+
+    return {
+        'field': field,
+        'operator': operator_name,
+        'value': value,
+    }
+
+
+def build_automation_action_from_flat_payload(parsed: dict[str, Any]) -> dict[str, Any] | None:
+    target = parsed.get('target') or parsed.get('device')
+    state = parsed.get('state')
+    if state is None:
+        desired_action = parsed.get('device_action') or parsed.get('output_state')
+        if desired_action in {'turn_on', 'on', 'bat'}:
+            state = True
+        elif desired_action in {'turn_off', 'off', 'tat'}:
+            state = False
+
+    if target is None or state is None:
+        return None
+
+    return {
+        'target': target,
+        'state': state,
+        'value': parsed.get('value'),
+        'cooldown_seconds': parsed.get('cooldown_seconds'),
+    }
+
+
+def parse_intent_commands(parsed: dict[str, Any], allow_empty: bool = False) -> list[dict[str, Any]]:
     raw_commands = parsed.get('commands')
     if raw_commands is None:
+        if allow_empty and 'action' not in parsed:
+            return []
         raw_commands = [
             {
                 'action': parsed.get('action'),
@@ -175,6 +388,8 @@ def parse_intent_commands(parsed: dict[str, Any]) -> list[dict[str, Any]]:
         ]
 
     if not isinstance(raw_commands, list) or not raw_commands:
+        if allow_empty:
+            return []
         raise LLMIntentParseError('commands must be a non-empty list.')
 
     commands = []
@@ -194,6 +409,100 @@ def parse_intent_commands(parsed: dict[str, Any]) -> list[dict[str, Any]]:
         raise LLMIntentParseError('commands must contain at least one valid command.')
 
     return commands
+
+
+def parse_automation_rule_requests(raw_requests: Any) -> list[dict[str, Any]]:
+    if raw_requests is None:
+        return []
+
+    if isinstance(raw_requests, dict):
+        raw_requests = [raw_requests]
+
+    if not isinstance(raw_requests, list):
+        raise LLMIntentParseError('automation_rules must be a list.')
+
+    return [parse_automation_rule_request(raw_request) for raw_request in raw_requests]
+
+
+def parse_automation_rule_request(raw_request: Any) -> dict[str, Any]:
+    if not isinstance(raw_request, dict):
+        raise LLMIntentParseError('Each automation rule request must be an object.')
+
+    operation = raw_request.get('operation', 'upsert')
+    if operation not in ALLOWED_AUTOMATION_OPERATIONS:
+        raise LLMIntentParseError(f'Invalid automation operation: {operation!r}')
+
+    request = {
+        'operation': operation,
+        'name': raw_request.get('name'),
+        'description': raw_request.get('description', ''),
+        'is_enabled': raw_request.get('is_enabled', True),
+    }
+
+    if operation in {'create', 'update', 'upsert'}:
+        request['condition'] = parse_automation_condition(raw_request.get('condition'))
+        request['action'] = parse_automation_action(raw_request.get('action'))
+
+    return request
+
+
+def parse_automation_condition(raw_condition: Any) -> dict[str, Any]:
+    if not isinstance(raw_condition, dict):
+        raise LLMIntentParseError('automation condition must be an object.')
+
+    field = raw_condition.get('field')
+    operator_name = raw_condition.get('operator')
+    if field not in ALLOWED_AUTOMATION_FIELDS:
+        raise LLMIntentParseError(f'Invalid automation field: {field!r}')
+
+    if operator_name not in {'>', '>=', '<', '<=', '==', '!='}:
+        raise LLMIntentParseError(f'Invalid automation operator: {operator_name!r}')
+
+    try:
+        value = float(raw_condition.get('value'))
+    except (TypeError, ValueError) as exc:
+        raise LLMIntentParseError('automation condition value must be a number.') from exc
+
+    return {
+        'field': field,
+        'operator': operator_name,
+        'value': value,
+    }
+
+
+def parse_automation_action(raw_action: Any) -> dict[str, Any]:
+    if not isinstance(raw_action, dict):
+        raise LLMIntentParseError('automation action must be an object.')
+
+    target = raw_action.get('target')
+    if target not in ALLOWED_AUTOMATION_TARGETS:
+        raise LLMIntentParseError(f'Invalid automation target: {target!r}')
+
+    state = raw_action.get('state')
+    if not isinstance(state, bool):
+        raise LLMIntentParseError('automation action state must be true or false.')
+
+    value = parse_output_value(raw_action.get('value'))
+    if value is None:
+        value = 100 if state else 0
+
+    cooldown_seconds = raw_action.get('cooldown_seconds')
+    if cooldown_seconds is None:
+        cooldown_seconds = 60
+    if isinstance(cooldown_seconds, bool):
+        raise LLMIntentParseError('automation cooldown_seconds must be a number.')
+
+    try:
+        cooldown_seconds = int(cooldown_seconds)
+    except (TypeError, ValueError) as exc:
+        raise LLMIntentParseError('automation cooldown_seconds must be a number.') from exc
+
+    return {
+        'target': target,
+        'state': state,
+        'value': value,
+        'cooldown_seconds': max(0, cooldown_seconds),
+    }
 
 
 def parse_intent_command(raw_command: dict[str, Any]) -> dict[str, Any]:
@@ -290,6 +599,20 @@ def is_information_question(normalized_text: str) -> bool:
         'trang thai',
     ]
     return any(marker in normalized_text for marker in question_markers)
+
+
+def is_automation_request(text: str) -> bool:
+    normalized_text = normalize_vietnamese_text(text)
+    markers = [
+        'khi ',
+        'neu ',
+        'rule',
+        'automation',
+        'tu dong',
+        'luat',
+        'dieu kien',
+    ]
+    return any(marker in normalized_text for marker in markers)
 
 
 def get_sensor_value(latest_sensor: Any, key: str) -> Any:

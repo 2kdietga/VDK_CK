@@ -10,7 +10,7 @@ from channels.db import database_sync_to_async
 from channels.generic.websocket import AsyncWebsocketConsumer
 from django.utils import timezone
 
-from automation.services import evaluate_automation_rules
+from automation.services import apply_automation_rule_requests, evaluate_automation_rules
 from control.models import CommandLog, OutputTarget
 from monitoring.models import SensorReading
 from assistant_ai.services import (
@@ -166,6 +166,10 @@ class ESP32Consumer(AsyncWebsocketConsumer):
         await self.send_json({'type': 'audio_done'})
 
     async def send_voice_command(self, intent: dict[str, Any]) -> None:
+        automation_rules = intent.get('automation_rules')
+        if isinstance(automation_rules, list) and automation_rules:
+            await self.apply_voice_automation_rules(automation_rules)
+
         for command_name, params in commands_from_intent(intent):
             command = build_command(command_name, params)
 
@@ -296,6 +300,10 @@ class ESP32Consumer(AsyncWebsocketConsumer):
     def get_iot_context(self) -> dict[str, Any]:
         return get_current_iot_context()
 
+    @database_sync_to_async
+    def apply_voice_automation_rules(self, automation_rules: list[dict[str, Any]]) -> list[str]:
+        return apply_automation_rule_requests(automation_rules)
+
     async def apply_automation_rules(self, sensor_data: dict[str, Any]) -> None:
         commands = await self.evaluate_automation_rules(sensor_data)
         for command in commands:
@@ -381,6 +389,6 @@ def commands_from_intent(intent: dict[str, Any]) -> list[tuple[str, dict[str, An
             commands.append(command_from_intent(raw_command))
 
     if not commands:
-        return [command_from_intent(intent)]
+        return []
 
     return commands

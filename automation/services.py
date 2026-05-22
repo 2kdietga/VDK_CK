@@ -13,6 +13,8 @@ from .models import AutomationRule
 
 
 DEFAULT_RULE_COOLDOWN_SECONDS = 60
+ALLOWED_RULE_FIELDS = {'temperature', 'humidity', 'light'}
+ALLOWED_RULE_TARGETS = {'led', 'fan'}
 FIELD_ALIASES = {
     'temp': 'temperature',
     'nhiet_do': 'temperature',
@@ -21,6 +23,13 @@ FIELD_ALIASES = {
     'lux': 'light',
     'light_level': 'light',
     'anh_sang': 'light',
+}
+TARGET_ALIASES = {
+    'light': 'led',
+    'den': 'led',
+    'led': 'led',
+    'fan': 'fan',
+    'quat': 'fan',
 }
 OPERATORS = {
     '>': operator.gt,
@@ -44,6 +53,216 @@ def evaluate_automation_rules(sensor_data: dict[str, Any]) -> list[dict[str, Any
             commands.append(command)
 
     return commands
+
+
+def apply_automation_rule_requests(requests: list[dict[str, Any]]) -> list[str]:
+    results = []
+    for request in requests:
+        result = apply_automation_rule_request(request)
+        if result:
+            results.append(result)
+    return results
+
+
+def apply_automation_rule_request(request: dict[str, Any]) -> str:
+    operation = request.get('operation', 'upsert')
+    name = str(request.get('name') or '').strip()
+
+    if operation in {'create', 'update', 'upsert'}:
+        rule_data = build_rule_data_from_request(request)
+        if rule_data is None:
+            return ''
+
+        if not name:
+            name = default_rule_name(rule_data['conditions'][0], rule_data['action'])
+
+        conflicts = find_conflicting_rules(name, rule_data)
+        disabled_conflict_names = list(conflicts.values_list('name', flat=True))
+        conflicts.update(is_enabled=False, updated_at=timezone.now())
+
+        rule, created = AutomationRule.objects.update_or_create(
+            name=name,
+            defaults={
+                'description': request.get('description', ''),
+                'conditions': rule_data['conditions'],
+                'action': rule_data['action'],
+                'is_enabled': request.get('is_enabled', True),
+            },
+        )
+        result = f'{"Created" if created else "Updated"} automation rule: {rule.name}.'
+        if disabled_conflict_names:
+            result += f' Disabled conflicting rules: {", ".join(disabled_conflict_names)}.'
+        return result
+
+    if not name:
+        return ''
+
+    rule = AutomationRule.objects.filter(name=name).first()
+    if rule is None:
+        return f'Automation rule not found: {name}.'
+
+    if operation == 'enable':
+        rule.is_enabled = True
+        rule.save(update_fields=['is_enabled', 'updated_at'])
+        return f'Enabled automation rule: {rule.name}.'
+
+    if operation == 'disable':
+        rule.is_enabled = False
+        rule.save(update_fields=['is_enabled', 'updated_at'])
+        return f'Disabled automation rule: {rule.name}.'
+
+    if operation == 'delete':
+        rule.delete()
+        return f'Deleted automation rule: {name}.'
+
+    return ''
+
+
+def build_rule_data_from_request(request: dict[str, Any]) -> dict[str, Any] | None:
+    condition = request.get('condition')
+    action = request.get('action')
+    if not isinstance(condition, dict) or not isinstance(action, dict):
+        return None
+
+    field = normalize_field(condition.get('field'))
+    operator_name = condition.get('operator')
+    if field not in ALLOWED_RULE_FIELDS or operator_name not in OPERATORS:
+        return None
+
+    try:
+        threshold = float(condition.get('value'))
+    except (TypeError, ValueError):
+        return None
+
+    target = normalize_target(action.get('target'))
+    state = action.get('state')
+    if target not in ALLOWED_RULE_TARGETS or not isinstance(state, bool):
+        return None
+
+    value = action.get('value', 100 if state else 0)
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or value < 0 or value > 100:
+        return None
+
+    cooldown_seconds = parse_cooldown_seconds(action.get('cooldown_seconds'))
+    return {
+        'conditions': [
+            {
+                'field': field,
+                'operator': operator_name,
+                'value': threshold,
+            }
+        ],
+        'action': {
+            'name': 'set_output',
+            'params': {
+                'target': target,
+                'state': state,
+                'value': round(value),
+            },
+            'cooldown_seconds': cooldown_seconds,
+        },
+    }
+
+
+def normalize_target(target: Any) -> str | None:
+    if not isinstance(target, str) or not target:
+        return None
+
+    normalized = target.strip()
+    return TARGET_ALIASES.get(normalized, normalized)
+
+
+def default_rule_name(condition: dict[str, Any], action: dict[str, Any]) -> str:
+    params = action.get('params', {})
+    state = 'on' if params.get('state') else 'off'
+    return (
+        f"Auto {condition.get('field')} {condition.get('operator')} {condition.get('value')} "
+        f"-> {params.get('target')} {state}"
+    )
+
+
+def find_conflicting_rules(rule_name: str, rule_data: dict[str, Any]):
+    new_condition = first_condition(rule_data.get('conditions'))
+    new_params = action_params(rule_data.get('action'))
+    if not new_condition or not new_params:
+        return AutomationRule.objects.none()
+
+    candidates = AutomationRule.objects.filter(is_enabled=True).exclude(name=rule_name)
+    conflict_ids = []
+    for rule in candidates:
+        existing_condition = first_condition(rule.conditions)
+        existing_params = action_params(rule.action)
+        if rules_conflict(new_condition, new_params, existing_condition, existing_params):
+            conflict_ids.append(rule.id)
+
+    return AutomationRule.objects.filter(id__in=conflict_ids)
+
+
+def rules_conflict(
+    new_condition: dict[str, Any],
+    new_params: dict[str, Any],
+    existing_condition: dict[str, Any] | None,
+    existing_params: dict[str, Any] | None,
+) -> bool:
+    if not existing_condition or not existing_params:
+        return False
+
+    if new_params.get('target') != existing_params.get('target'):
+        return False
+
+    if new_params == existing_params:
+        return False
+
+    if normalize_field(new_condition.get('field')) != normalize_field(existing_condition.get('field')):
+        return False
+
+    return condition_ranges_overlap(new_condition, existing_condition)
+
+
+def first_condition(conditions: Any) -> dict[str, Any] | None:
+    if isinstance(conditions, list) and conditions and isinstance(conditions[0], dict):
+        return conditions[0]
+    return None
+
+
+def action_params(action: Any) -> dict[str, Any] | None:
+    if not isinstance(action, dict):
+        return None
+
+    params = action.get('params')
+    if not isinstance(params, dict):
+        return None
+
+    return normalize_set_output_params(params)
+
+
+def condition_ranges_overlap(left: dict[str, Any], right: dict[str, Any]) -> bool:
+    left_range = condition_to_range(left)
+    right_range = condition_to_range(right)
+    if left_range is None or right_range is None:
+        return True
+
+    left_min, left_max = left_range
+    right_min, right_max = right_range
+    return left_min <= right_max and right_min <= left_max
+
+
+def condition_to_range(condition: dict[str, Any]) -> tuple[float, float] | None:
+    operator_name = condition.get('operator')
+    try:
+        value = float(condition.get('value'))
+    except (TypeError, ValueError):
+        return None
+
+    if operator_name in {'>', '>='}:
+        return (value, float('inf'))
+    if operator_name in {'<', '<='}:
+        return (float('-inf'), value)
+    if operator_name in {'=', '=='}:
+        return (value, value)
+    if operator_name == '!=':
+        return (float('-inf'), float('inf'))
+    return None
 
 
 def rule_matches(rule: AutomationRule, sensor_data: dict[str, Any]) -> bool:
