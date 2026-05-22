@@ -235,7 +235,7 @@ Return:
       "action": {"target": "fan", "state": true, "value": 80, "cooldown_seconds": 60}
     }
   ],
-  "reply_message": "Da tao rule bat quat 80 phan tram khi nhiet do tren 30 do."
+  "reply_message": "Đã tạo rule bật quạt 80 phần trăm khi nhiệt độ trên 30 độ."
 }
 
 Correct range automation example:
@@ -254,7 +254,7 @@ Return:
       "action": {"target": "fan", "state": true, "value": 100, "cooldown_seconds": 60}
     }
   ],
-  "reply_message": "Da tao rule bat quat khi nhiet do tren 30 va duoi 50 do."
+  "reply_message": "Đã tạo rule bật quạt khi nhiệt độ trên 30 và dưới 50 độ."
 }
 
 Correct immediate-control example:
@@ -265,7 +265,7 @@ Return:
     {"action": "turn_on", "device": "fan", "value": 80}
   ],
   "automation_rules": [],
-  "reply_message": "Da bat quat muc 80 phan tram."
+  "reply_message": "Đã bật quạt 80 phần trăm."
 }
 '''
 
