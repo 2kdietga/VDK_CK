@@ -80,7 +80,7 @@
     if (!canvas) return;
     const ctx = canvas.getContext('2d');
     const { width, height } = resizeHistoryCanvas(canvas);
-    const padding = { top: 18, right: 18, bottom: 34, left: 44 };
+    const padding = { top: 18, right: 18, bottom: 46, left: 44 };
     const plotWidth = width - padding.left - padding.right;
     const plotHeight = height - padding.top - padding.bottom;
     const values = [];
@@ -151,23 +151,57 @@
       ctx.stroke();
     });
 
-    const first = samples[0];
-    const last = samples[samples.length - 1];
-    if (first && last) {
-      ctx.fillStyle = '#657184';
-      ctx.font = '12px system-ui, sans-serif';
-      ctx.fillText(formatTime(first.timestamp), padding.left, height - 10);
-      const lastText = formatTime(last.timestamp);
-      const lastWidth = ctx.measureText(lastText).width;
-      ctx.fillText(lastText, width - padding.right - lastWidth, height - 10);
-    }
+    drawHistoryTimeAxis(ctx, samples, scaleX, padding, width, height);
   }
 
-  function formatTime(timestamp) {
+  function drawHistoryTimeAxis(ctx, samples, scaleX, padding, width, height) {
+    if (!samples.length) return;
+
+    const tickIndexes = buildHistoryTickIndexes(samples.length);
+    ctx.strokeStyle = '#cbd5e1';
+    ctx.fillStyle = '#657184';
+    ctx.lineWidth = 1;
+    ctx.font = '12px system-ui, sans-serif';
+    ctx.textBaseline = 'top';
+
+    tickIndexes.forEach((index) => {
+      const sample = samples[index];
+      const label = formatHistoryTime(sample.timestamp);
+      if (!label) return;
+
+      const x = scaleX(index);
+      ctx.beginPath();
+      ctx.moveTo(x, height - padding.bottom);
+      ctx.lineTo(x, height - padding.bottom + 5);
+      ctx.stroke();
+
+      const labelWidth = ctx.measureText(label).width;
+      const textX = Math.min(
+        Math.max(x - labelWidth / 2, padding.left),
+        width - padding.right - labelWidth,
+      );
+      ctx.fillText(label, textX, height - padding.bottom + 10);
+    });
+  }
+
+  function buildHistoryTickIndexes(length) {
+    if (length <= 1) return [0];
+    const tickCount = Math.min(5, length);
+    const indexes = new Set();
+    for (let i = 0; i < tickCount; i += 1) {
+      indexes.add(Math.round((i * (length - 1)) / (tickCount - 1)));
+    }
+    return Array.from(indexes).sort((a, b) => a - b);
+  }
+
+  function formatHistoryTime(timestamp) {
     if (!timestamp) return '';
     const date = new Date(timestamp);
     if (Number.isNaN(date.getTime())) return '';
-    return date.toLocaleString();
+    return date.toLocaleTimeString([], {
+      hour: '2-digit',
+      minute: '2-digit',
+    });
   }
 
   function renderHistory() {

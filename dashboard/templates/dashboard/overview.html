@@ -141,7 +141,7 @@
     if (!canvas) return;
     const ctx = canvas.getContext('2d');
     const { width, height } = resizeCanvas(canvas);
-    const padding = { top: 18, right: 18, bottom: 26, left: 44 };
+    const padding = { top: 18, right: 18, bottom: 42, left: 44 };
     const plotWidth = width - padding.left - padding.right;
     const plotHeight = height - padding.top - padding.bottom;
     const visibleSamples = samples.slice(-120);
@@ -210,6 +210,63 @@
         }
       });
       ctx.stroke();
+    });
+
+    drawTimeAxis(ctx, visibleSamples, scaleX, padding, width, height);
+  }
+
+  function drawTimeAxis(ctx, samples, scaleX, padding, width, height) {
+    if (!samples.length) return;
+
+    const tickIndexes = buildTickIndexes(samples.length);
+    ctx.strokeStyle = '#cbd5e1';
+    ctx.fillStyle = '#657184';
+    ctx.lineWidth = 1;
+    ctx.font = '12px system-ui, sans-serif';
+    ctx.textBaseline = 'top';
+
+    tickIndexes.forEach((index) => {
+      const sample = samples[index];
+      const label = formatAxisTime(sample.timestamp);
+      if (!label) return;
+
+      const x = scaleX(index);
+      ctx.beginPath();
+      ctx.moveTo(x, height - padding.bottom);
+      ctx.lineTo(x, height - padding.bottom + 5);
+      ctx.stroke();
+
+      const labelWidth = ctx.measureText(label).width;
+      const textX = Math.min(
+        Math.max(x - labelWidth / 2, padding.left),
+        width - padding.right - labelWidth,
+      );
+      ctx.fillText(label, textX, height - padding.bottom + 10);
+    });
+  }
+
+  function buildTickIndexes(length) {
+    if (length <= 1) return [0];
+    const tickCount = Math.min(5, length);
+    const indexes = new Set();
+    for (let i = 0; i < tickCount; i += 1) {
+      indexes.add(Math.round((i * (length - 1)) / (tickCount - 1)));
+    }
+    return Array.from(indexes).sort((a, b) => a - b);
+  }
+
+  function formatAxisTime(timestamp) {
+    if (!timestamp) return '';
+    const raw = Number(timestamp);
+    const date = Number.isNaN(raw)
+      ? new Date(timestamp)
+      : new Date(raw < 1000000000000 ? raw * 1000 : raw);
+    if (Number.isNaN(date.getTime())) return '';
+
+    return date.toLocaleTimeString([], {
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
     });
   }
 
